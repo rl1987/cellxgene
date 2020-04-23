@@ -284,6 +284,28 @@ const requestUserDefinedGene = (gene) => async (dispatch, getState) => {
   }
 };
 
+const requestGeneSet = (gene) => async (dispatch, getState) => {
+  dispatch({ type: "request gene set started" });
+  try {
+    await await _doRequestExpressionData(dispatch, getState, [gene]);
+    const { world } = getState();
+
+    /* then send the success case action through */
+    return dispatch({
+      type: "request gene set success",
+      data: {
+        genes: [gene],
+        expression: world.varData.col(gene).asArray(),
+      },
+    });
+  } catch (error) {
+    return dispatch({
+      type: "request gene set error",
+      error,
+    });
+  }
+};
+
 const dispatchDiffExpErrors = (dispatch, response) => {
   switch (response.status) {
     case 403:
@@ -456,4 +478,5 @@ export default {
   resetWorldToUniverse,
   saveObsAnnotations,
   setWorldToSelection,
+  requestGeneSet,
 };

@@ -14,6 +14,9 @@ const Controls = (
     userDefinedGenesLoading: false,
     diffexpGenes: [],
 
+    geneSet: [],
+    geneSetLoading: false,
+
     resettingInterface: false,
     graphInteractionMode: "select",
     opacityForDeselectedCells: 0.2,
@@ -118,6 +121,27 @@ const Controls = (
         userDefinedGenesLoading: false,
       };
     }
+
+    case "request gene set started": {
+      return {
+        ...state,
+        geneSetLoading: true,
+      };
+    }
+    case "request gene set error": {
+      return {
+        ...state,
+        geneSetLoading: false,
+      };
+    }
+    case "request gene set success": {
+      return {
+        ...state,
+        geneSet: action.data.genes,
+        geneSetLoading: false,
+      };
+    }
+
     case "request differential expression success": {
       const { world } = prevSharedState;
       const varIndexName = world.schema.annotations.var.index;

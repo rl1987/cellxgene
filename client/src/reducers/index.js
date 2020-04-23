@@ -22,6 +22,7 @@ import ontology from "./ontology";
 import centroidLabels from "./centroidLabels";
 import pointDialation from "./pointDilation";
 import { reembedController, reembedding } from "./reembed";
+import geneSet from "./geneSet";
 
 import undoableConfig from "./undoableConfig";
 
@@ -43,6 +44,7 @@ const Reducer = undoable(
     ["differential", differential],
     ["responsive", responsive],
     ["centroidLabels", centroidLabels],
+    ["geneSet", geneSet],
     ["pointDilation", pointDialation],
     ["reembedController", reembedController],
     ["autosave", autosave],
