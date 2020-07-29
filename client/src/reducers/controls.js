@@ -14,6 +14,7 @@ const Controls = (
     userDefinedGenesLoading: false,
     diffexpGenes: [],
 
+    datasetInfoDrawerVisible: true,
     resettingInterface: false,
     graphInteractionMode: "select",
     opacityForDeselectedCells: 0.2,
@@ -140,6 +141,15 @@ const Controls = (
         ...state,
         graphRenderCounter: c,
       };
+    }
+
+    /*******************************
+          Dataset Info Drawer
+    *******************************/
+
+    case "toggle dataset info drawer": {
+      const { datasetInfoDrawerVisible } = state;
+      return { datasetInfoDrawerVisible: !datasetInfoDrawerVisible };
     }
 
     /*******************************

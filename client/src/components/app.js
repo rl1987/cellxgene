@@ -13,6 +13,7 @@ import MenuBar from "./menubar";
 import Autosave from "./autosave";
 import Embedding from "./embedding";
 import TermsOfServicePrompt from "./termsPrompt";
+import DatasetInfoDrawer from "./datasetInfoDrawer";
 
 import actions from "../actions";
 
@@ -75,6 +76,7 @@ class App extends React.Component {
               <>
                 <MenuBar />
                 <Embedding />
+                <DatasetInfoDrawer />
                 <Autosave />
                 <TermsOfServicePrompt />
                 <Legend viewportRef={viewportRef} />
