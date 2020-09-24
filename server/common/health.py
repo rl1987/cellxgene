@@ -23,12 +23,15 @@ def health_check(config):
     """
     health = {"status": None, "version": "1", "releaseID": cellxgene_version}
 
-    checks = [
-        (config.single_dataset__datapath is not None or config.multi_dataset__dataroot is not None),
-        _is_accessible(config.single_dataset__datapath, config),
-        _is_accessible(config.multi_dataset__dataroot, config),
-    ]
-    health["status"] = "pass" if all(checks) else "fail"
+    checks = False
+    server_config = config.server_config
+    if config.is_multi_dataset():
+        dataroots = [datapath_dict["dataroot"] for datapath_dict in server_config.multi_dataset__dataroot.values()]
+        checks = all([_is_accessible(dataroot, server_config) for dataroot in dataroots])
+    else:
+        checks = _is_accessible(server_config.single_dataset__datapath, server_config)
+
+    health["status"] = "pass" if checks else "fail"
     code = HTTPStatus.OK if health["status"] == "pass" else HTTPStatus.BAD_REQUEST
     response = make_response(jsonify(health), code)
     response.headers["Content-Type"] = "application/health+json"

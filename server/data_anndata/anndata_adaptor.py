@@ -1,21 +1,22 @@
 import warnings
-
-import numpy as np
-import pandas as pd
-from pandas.core.dtypes.dtypes import CategoricalDtype
-import anndata
-from scipy import sparse
-from packaging import version
 from datetime import datetime
+
+import anndata
+import numpy as np
+from packaging import version
+from pandas.core.dtypes.dtypes import CategoricalDtype
+from scipy import sparse
 from server_timing import Timing as ServerTiming
 
+import server.compute.diffexp_generic as diffexp_generic
+from server.common.colors import convert_anndata_category_colors_to_cxg_category_colors
+from server.common.constants import Axis, MAX_LAYOUTS
+from server.common.corpora import corpora_get_props_from_anndata
+from server.common.errors import PrepareError, DatasetAccessError, FilterError
+from server.common.utils.type_conversion_utils import get_schema_type_hint_of_array
+from server.compute.scanpy import scanpy_umap
 from server.data_common.data_adaptor import DataAdaptor
 from server.data_common.fbs.matrix import encode_matrix_fbs
-from server.common.utils import series_to_schema
-from server.common.constants import Axis, MAX_LAYOUTS
-from server.common.errors import PrepareError, DatasetAccessError, FilterError
-from server.compute.scanpy import scanpy_umap
-import server.compute.diffexp_generic as diffexp_generic
 
 anndata_version = version.parse(str(anndata.__version__)).release
 
@@ -27,10 +28,9 @@ def anndata_version_is_pre_070():
 
 
 class AnndataAdaptor(DataAdaptor):
-    def __init__(self, data_locator, config=None):
-        super().__init__(config)
+    def __init__(self, data_locator, app_config=None, dataset_config=None):
+        super().__init__(data_locator, app_config, dataset_config)
         self.data = None
-        self.data_locator = data_locator
         self._load_data(data_locator)
         self._validate_and_initialize()
 
@@ -54,14 +54,11 @@ class AnndataAdaptor(DataAdaptor):
         return data_locator.size() if data_locator.islocal() else 0
 
     @staticmethod
-    def open(data_locator, config):
-        return AnndataAdaptor(data_locator, config)
+    def open(data_locator, app_config, dataset_config=None):
+        return AnndataAdaptor(data_locator, app_config, dataset_config)
 
-    def get_location(self):
-        return self.data_locator.uri_or_path
-
-    def get_data_locator(self):
-        return self.data_locator
+    def get_corpora_props(self):
+        return corpora_get_props_from_anndata(self.data)
 
     def get_name(self):
         return "cellxgene anndata adaptor version"
@@ -99,7 +96,7 @@ class AnndataAdaptor(DataAdaptor):
         for (ax_name, var_name) in ((Axis.OBS, "obs"), (Axis.VAR, "var")):
             config_name = f"single_dataset__{var_name}_names"
             parameter_name = f"{var_name}_names"
-            name = getattr(self.config, config_name)
+            name = getattr(self.server_config, config_name)
             df_axis = getattr(self.data, str(ax_name))
             if name is None:
                 # Default: create unique names from index
@@ -140,7 +137,7 @@ class AnndataAdaptor(DataAdaptor):
             curr_axis = getattr(self.data, str(ax))
             for ann in curr_axis:
                 ann_schema = {"name": ann, "writable": False}
-                ann_schema.update(series_to_schema(curr_axis[ann]))
+                ann_schema.update(get_schema_type_hint_of_array(curr_axis[ann]))
                 self.schema["annotations"][ax]["columns"].append(ann_schema)
 
         for layout in self.get_embedding_names():
@@ -160,7 +157,7 @@ class AnndataAdaptor(DataAdaptor):
             with data_locator.local_handle() as lh:
                 # as of AnnData 0.6.19, backed mode performs initial load fast, but at the
                 # cost of significantly slower access to X data.
-                backed = "r" if self.config.adaptor__anndata_adaptor__backed else None
+                backed = "r" if self.server_config.adaptor__anndata_adaptor__backed else None
                 self.data = anndata.read_h5ad(lh, backed=backed)
 
         except ValueError:
@@ -180,15 +177,15 @@ class AnndataAdaptor(DataAdaptor):
             )
 
     def _validate_and_initialize(self):
-        if anndata_version_is_pre_070() and self.config.adaptor__anndata_adaptor__backed:
+        if anndata_version_is_pre_070() and self.server_config.adaptor__anndata_adaptor__backed:
             warnings.warn(
-                f"Use of --backed mode with anndata versions older than 0.7 will have serious "
+                "Use of --backed mode with anndata versions older than 0.7 will have serious "
                 "performance issues. Please update to at least anndata 0.7 or later."
             )
 
         # var and obs column names must be unique
         if not self.data.obs.columns.is_unique or not self.data.var.columns.is_unique:
-            raise KeyError(f"All annotation column names must be unique.")
+            raise KeyError("All annotation column names must be unique.")
 
         self._alias_annotation_names()
         self._validate_data_types()
@@ -198,17 +195,18 @@ class AnndataAdaptor(DataAdaptor):
 
         # heuristic
         n_values = self.data.shape[0] * self.data.shape[1]
-        if (n_values > 1e8 and self.config.adaptor__anndata_adaptor__backed is True) or (n_values > 5e8):
+        if (n_values > 1e8 and self.server_config.adaptor__anndata_adaptor__backed is True) or (n_values > 5e8):
             self.parameters.update({"diffexp_may_be_slow": True})
 
     def _is_valid_layout(self, arr):
         """ return True if this layout data is a valid array for front-end presentation:
-            * ndarray, with shape (n_obs, >= 2), dtype float/int/uint
-            * contains only finite values
+            * ndarray, dtype float/int/uint
+            * with shape (n_obs, >= 2)
+            * with all values finite or NaN (no +Inf or -Inf)
         """
         is_valid = type(arr) == np.ndarray and arr.dtype.kind in "fiu"
         is_valid = is_valid and arr.shape[0] == self.data.n_obs and arr.shape[1] >= 2
-        is_valid = is_valid and np.all(np.isfinite(arr))
+        is_valid = is_valid and not np.any(np.isinf(arr)) and not np.all(np.isnan(arr))
         return is_valid
 
     def _validate_data_types(self):
@@ -221,8 +219,8 @@ class AnndataAdaptor(DataAdaptor):
         X0 = self.data.X[0, 0:1]
         if sparse.isspmatrix(X0) and not sparse.isspmatrix_csc(X0):
             warnings.warn(
-                f"Anndata data matrix is sparse, but not a CSC (columnar) matrix.  "
-                f"Performance may be improved by using CSC."
+                "Anndata data matrix is sparse, but not a CSC (columnar) matrix.  "
+                "Performance may be improved by using CSC."
             )
         if self.data.X.dtype != "float32":
             warnings.warn(
@@ -245,7 +243,7 @@ class AnndataAdaptor(DataAdaptor):
                     )
                 if isinstance(datatype, CategoricalDtype):
                     category_num = len(curr_axis[ann].dtype.categories)
-                    if category_num > 500 and category_num > self.config.presentation__max_categories:
+                    if category_num > 500 and category_num > self.dataset_config.presentation__max_categories:
                         warnings.warn(
                             f"{str(ax).title()} annotation '{ann}' has {category_num} categories, this may be "
                             f"cumbersome or slow to display. We recommend setting the "
@@ -276,7 +274,7 @@ class AnndataAdaptor(DataAdaptor):
             c) cap total list of layouts at global const MAX_LAYOUTS
         """
         # load default layouts from the data.
-        layouts = self.config.embeddings__names
+        layouts = self.dataset_config.embeddings__names
 
         if layouts is None or len(layouts) == 0:
             layouts = [key[2:] for key in self.data.obsm_keys() if type(key) == str and key.startswith("X_")]
@@ -294,10 +292,10 @@ class AnndataAdaptor(DataAdaptor):
                 valid_layouts.append(layout)
 
         if len(valid_layouts) == 0:
-            raise PrepareError(f"No valid layout data.")
+            raise PrepareError("No valid layout data.")
 
         # cap layouts to MAX_LAYOUTS
-        return layouts[0:MAX_LAYOUTS]
+        return valid_layouts[0:MAX_LAYOUTS]
 
     def get_embedding_array(self, ename, dims=2):
         full_embedding = self.data.obsm[f"X_{ename}"]
@@ -315,23 +313,25 @@ class AnndataAdaptor(DataAdaptor):
             raise FilterError("Error parsing filter")
         with ServerTiming.time("layout.compute"):
             X_umap = scanpy_umap(self.data, obs_mask)
-            normalized_layout = DataAdaptor.normalize_embedding(X_umap)
 
         # Server picks reemedding name, which must not collide with any other
-        # embedding name generated by this backed.
+        # embedding name generated by this backend.
         name = f"reembed:{method}_{datetime.now().isoformat(timespec='milliseconds')}"
         dims = [f"{name}_0", f"{name}_1"]
-        df = pd.DataFrame(normalized_layout, columns=dims)
-        fbs = encode_matrix_fbs(df, col_idx=df.columns, row_idx=None)
-        schema = {"name": name, "type": "float32", "dims": dims}
-        return (schema, fbs)
+        layout_schema = {"name": name, "type": "float32", "dims": dims}
+        self.schema["layout"]["obs"].append(layout_schema)
+        self.data.obsm[f"X_{name}"] = X_umap
+        return layout_schema
 
     def compute_diffexp_ttest(self, maskA, maskB, top_n=None, lfc_cutoff=None):
         if top_n is None:
-            top_n = self.config.diffexp__top_n
+            top_n = self.dataset_config.diffexp__top_n
         if lfc_cutoff is None:
-            lfc_cutoff = self.config.diffexp__lfc_cutoff
+            lfc_cutoff = self.dataset_config.diffexp__lfc_cutoff
         return diffexp_generic.diffexp_ttest(self, maskA, maskB, top_n, lfc_cutoff)
+
+    def get_colors(self):
+        return convert_anndata_category_colors_to_cxg_category_colors(self.data)
 
     def get_X_array(self, obs_mask=None, var_mask=None):
         if obs_mask is None:
@@ -351,7 +351,7 @@ class AnndataAdaptor(DataAdaptor):
         return getattr(self.data.obs, term_name)
 
     def get_obs_index(self):
-        name = self.config.single_dataset__obs_names
+        name = self.server_config.single_dataset__obs_names
         if name is None:
             return self.original_obs_index
         else:

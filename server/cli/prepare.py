@@ -5,7 +5,7 @@ import pandas as pd
 from numpy import ndarray, unique
 from scipy.sparse.csc import csc_matrix
 
-from server.common.utils import sort_options
+from server.common.utils.utils import sort_options
 
 
 @sort_options
@@ -37,7 +37,7 @@ from server.common.utils import sort_options
     default=False,
     is_flag=True,
     help="Do not run quality control metrics. By default cellxgene runs them "
-    "(saved to adata.obs and adata.var; see scanpy.pp.calculate_qc_metrics for details).",
+         "(saved to adata.obs and adata.var; see scanpy.pp.calculate_qc_metrics for details).",
 )
 @click.option(
     "--make-obs-names-unique/--no-make-obs-names-unique",
@@ -53,18 +53,18 @@ from server.common.utils import sort_options
 )
 @click.help_option("--help", "-h", help="Show this message and exit.")
 def prepare(
-    data,
-    embedding,
-    recipe,
-    output,
-    plotting,
-    sparse,
-    overwrite,
-    set_obs_names,
-    set_var_names,
-    skip_qc,
-    make_obs_names_unique,
-    make_var_names_unique,
+        data,
+        embedding,
+        recipe,
+        output,
+        plotting,
+        sparse,
+        overwrite,
+        set_obs_names,
+        set_var_names,
+        skip_qc,
+        make_obs_names_unique,
+        make_var_names_unique,
 ):
     """
     Preprocess data for use with cellxgene.
@@ -73,7 +73,8 @@ def prepare(
     (h5ad, loom, or a 10x directory), runs dimensionality reduction,
     computes nearest neighbors, computes an embedding, performs clustering,
     and saves the results. Includes additional options for naming annotations,
-    ensuring sparsity, and plotting results."""
+    ensuring sparsity, and plotting results.
+    """
 
     # collect slow imports here to make CLI startup more responsive
     click.echo("[cellxgene] Starting CLI...")

@@ -1,5 +1,6 @@
 import { Colors } from "@blueprintjs/core";
 import { dispatchNetworkErrorMessageToUser } from "./util/actionHelpers";
+import * as ENV_DEFAULT from "../../environment.default.json";
 
 /* if a categorical metadata field has more options than this, truncate */
 export const maxCategoricalOptionsToDisplay = 200;
@@ -15,7 +16,6 @@ export const configDefaults = {
   features: {},
   displayNames: {},
   parameters: {
-    "max-category-items": 1000,
     "disable-diffexp": false,
     "diffexp-may-be-slow": false,
   },
@@ -61,8 +61,9 @@ export const maxControlsWidth = 800;
 export const graphMargin = { top: 20, right: 10, bottom: 30, left: 40 };
 export const graphWidth = 700;
 export const graphHeight = 700;
-export const scatterplotMarginLeft = 25;
+export const scatterplotMarginLeft = 11;
 
+export const rightSidebarWidth = 365;
 export const leftSidebarWidth = 365;
 export const leftSidebarSectionHeading = {
   fontSize: 18,
@@ -73,7 +74,7 @@ export const leftSidebarSectionHeading = {
 export const leftSidebarSectionPadding = 10;
 export const categoryLabelDisplayStringLongLength = 27;
 export const categoryLabelDisplayStringShortLength = 11;
-export const categoryDisplayStringMaxLength = 41;
+export const categoryDisplayStringMaxLength = 33;
 
 export const maxUserDefinedGenes = 25;
 export const maxGenes = 100;
@@ -82,21 +83,25 @@ export const maxGenes = 100;
 export const tooltipHoverOpenDelay = 1000; /* ms delay before a tooltip displays */
 export const tooltipHoverOpenDelayQuick = 500;
 
+const CXG_SERVER_PORT =
+  process.env.CXG_SERVER_PORT || ENV_DEFAULT.CXG_SERVER_PORT;
+
 let _API;
 
 if (window.CELLXGENE && window.CELLXGENE.API) {
   _API = window.CELLXGENE.API;
 } else {
-  if (process.env.CXG_SERVER_PORT === undefined) {
+  if (CXG_SERVER_PORT === undefined) {
     const errorMessage = "Please set the CXG_SERVER_PORT environment variable.";
     dispatchNetworkErrorMessageToUser(errorMessage);
     throw new Error(errorMessage);
   }
+
   _API = {
     // prefix: "http://api.clustering.czi.technology/api/",
     // prefix: "http://tabulamuris.cxg.czi.technology/api/",
     // prefix: "http://api-staging.clustering.czi.technology/api/",
-    prefix: `http://localhost:${process.env.CXG_SERVER_PORT}/api/`,
+    prefix: `http://localhost:${CXG_SERVER_PORT}/api/`,
     version: "v0.2/",
   };
 }

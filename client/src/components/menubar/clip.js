@@ -1,4 +1,3 @@
-// jshint esversion: 6
 import React from "react";
 import {
   Position,
@@ -6,11 +5,12 @@ import {
   Popover,
   NumericInput,
   Icon,
-  Tooltip
+  Tooltip,
 } from "@blueprintjs/core";
 import { tooltipHoverOpenDelay } from "../../globals";
+import styles from "./menubar.css";
 
-function Clip(props) {
+const Clip = React.memo((props) => {
   const {
     pendingClipPercentiles,
     clipPercentileMin,
@@ -21,7 +21,7 @@ function Clip(props) {
     isClipDisabled,
     handleClipOnKeyPress,
     handleClipPercentileMaxValueChange,
-    handleClipPercentileMinValueChange
+    handleClipPercentileMinValueChange,
   } = props;
 
   const clipMin =
@@ -34,12 +34,7 @@ function Clip(props) {
       : "";
 
   return (
-    <div
-      className="bp3-button-group"
-      style={{
-        marginRight: 10
-      }}
-    >
+    <div className={`bp3-button-group ${styles.menubarButton}`}>
       <Popover
         target={
           <Tooltip
@@ -52,7 +47,7 @@ function Clip(props) {
               data-testid="visualization-settings"
               className={`bp3-button bp3-icon-timeline-bar-chart ${activeClipClass}`}
               style={{
-                cursor: "pointer"
+                cursor: "pointer",
               }}
             />
           </Tooltip>
@@ -67,7 +62,7 @@ function Clip(props) {
               justifyContent: "flex-start",
               alignItems: "flex-start",
               flexDirection: "column",
-              padding: 10
+              padding: 10,
             }}
           >
             <div>Clip all continuous values to percentile range</div>
@@ -77,7 +72,7 @@ function Clip(props) {
                 justifyContent: "space-between",
                 alignItems: "center",
                 paddingTop: 5,
-                paddingBottom: 5
+                paddingBottom: 5,
               }}
             >
               <NumericInput
@@ -121,7 +116,7 @@ function Clip(props) {
                 style={{
                   cursor: "pointer",
                   marginRight: 5,
-                  marginLeft: 5
+                  marginLeft: 5,
                 }}
                 onClick={handleClipCommit}
               >
@@ -133,6 +128,6 @@ function Clip(props) {
       />
     </div>
   );
-}
+});
 
 export default Clip;

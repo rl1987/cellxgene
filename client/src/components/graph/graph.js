@@ -1,20 +1,26 @@
 // jshint esversion: 6
 import React from "react";
 import * as d3 from "d3";
-import { connect } from "react-redux";
+import { connect, shallowEqual } from "react-redux";
 import { mat3, vec2 } from "gl-matrix";
 import _regl from "regl";
 import memoize from "memoize-one";
+import Async from "react-async";
+import { Button } from "@blueprintjs/core";
 
-import * as globals from "../../globals";
 import setupSVGandBrushElements from "./setupSVGandBrush";
 import _camera from "../../util/camera";
 import _drawPoints from "./drawPointsRegl";
-import { isTypedArray } from "../../util/typeHelpers";
-import styles from "./graph.css";
+import {
+  createColorTable,
+  createColorQuery,
+} from "../../util/stateManager/colorHelpers";
+import * as globals from "../../globals";
 
 import GraphOverlayLayer from "./overlays/graphOverlayLayer";
 import CentroidLabels from "./overlays/centroidLabels";
+import actions from "../../actions";
+import renderThrottle from "../../util/renderThrottle";
 
 /*
 Simple 2D transforms control all point painting.  There are three:
@@ -23,23 +29,24 @@ Simple 2D transforms control all point painting.  There are three:
   * camera - apply a 2D camera transformation (pan, zoom)
   * projection - apply any transformation required for screen size and layout
 */
-
 function createProjectionTF(viewportWidth, viewportHeight) {
   /*
   the projection transform accounts for the screen size & other layout
   */
   const fractionToUse = 0.95; // fraction of min dimension to use
-  const topGutterSizePx = 32; // toolbar box height
-  const heightMinusGutter = viewportHeight - topGutterSizePx;
+  const topGutterSizePx = 32; // top gutter for tools
+  const bottomGutterSizePx = 32; // bottom gutter for tools
+  const heightMinusGutter =
+    viewportHeight - topGutterSizePx - bottomGutterSizePx;
   const minDim = Math.min(viewportWidth, heightMinusGutter);
   const aspectScale = [
     (fractionToUse * minDim) / viewportWidth,
-    (fractionToUse * minDim) / viewportHeight
+    (fractionToUse * minDim) / viewportHeight,
   ];
   const m = mat3.create();
   mat3.fromTranslation(m, [
     0,
-    -topGutterSizePx / viewportHeight / aspectScale[1]
+    (bottomGutterSizePx - topGutterSizePx) / viewportHeight / aspectScale[1],
   ]);
   mat3.scale(m, m, aspectScale);
   return m;
@@ -55,39 +62,49 @@ function createModelTF() {
   return m;
 }
 
-function renderThrottle(callback) {
-  /*
-  This wraps a call to requestAnimationFrame(), enforcing a single
-  render callback at any given time (ie, you can call this any number
-  of times, and it will coallesce multiple inter-frame calls into a
-  single render).
-  */
-  let rafCurrentlyInProgress = null;
-  return function f() {
-    if (rafCurrentlyInProgress) return;
-    const context = this;
-    rafCurrentlyInProgress = window.requestAnimationFrame(() => {
-      callback.apply(context);
-      rafCurrentlyInProgress = null;
-    });
-  };
-}
+const flagSelected = 1;
+const flagNaN = 2;
+const flagHighlight = 4;
 
-@connect(state => ({
-  universe: state.universe,
-  world: state.world,
-  crossfilter: state.crossfilter,
-  responsive: state.responsive,
-  colorRGB: state.colors.rgb,
+@connect((state) => ({
+  annoMatrix: state.annoMatrix,
+  crossfilter: state.obsCrossfilter,
   selectionTool: state.graphSelection.tool,
   currentSelection: state.graphSelection.selection,
   layoutChoice: state.layoutChoice,
-  centroidLabels: state.centroidLabels,
   graphInteractionMode: state.controls.graphInteractionMode,
-  colorAccessor: state.colors.colorAccessor,
-  pointDilation: state.pointDilation
+  colors: state.colors,
+  pointDilation: state.pointDilation,
 }))
 class Graph extends React.Component {
+  static createReglState(canvas) {
+    /*
+    Must be created for each canvas
+    */
+    // setup canvas, webgl draw function and camera
+    const camera = _camera(canvas);
+    const regl = _regl(canvas);
+    const drawPoints = _drawPoints(regl);
+
+    // preallocate webgl buffers
+    const pointBuffer = regl.buffer();
+    const colorBuffer = regl.buffer();
+    const flagBuffer = regl.buffer();
+
+    return {
+      camera,
+      regl,
+      drawPoints,
+      pointBuffer,
+      colorBuffer,
+      flagBuffer,
+    };
+  }
+
+  static watchAsync(props, prevProps) {
+    return !shallowEqual(props.watchProps, prevProps.watchProps);
+  }
+
   computePointPositions = memoize((X, Y, modelTF) => {
     /*
     compute the model coordinate for each point
@@ -102,7 +119,7 @@ class Graph extends React.Component {
     return positions;
   });
 
-  computePointColors = memoize(rgb => {
+  computePointColors = memoize((rgb) => {
     /*
     compute webgl colors for each point
     */
@@ -114,18 +131,44 @@ class Graph extends React.Component {
   });
 
   computeSelectedFlags = memoize(
-    (crossfilter, flagSelected, flagUnselected) => {
+    (crossfilter, _flagSelected, _flagUnselected) => {
       const x = crossfilter.fillByIsSelected(
         new Float32Array(crossfilter.size()),
-        flagSelected,
-        flagUnselected
+        _flagSelected,
+        _flagUnselected
       );
       return x;
     }
   );
 
+  computeHighlightFlags = memoize(
+    (nObs, pointDilationData, pointDilationLabel) => {
+      const flags = new Float32Array(nObs);
+      if (pointDilationData) {
+        for (let i = 0, len = flags.length; i < len; i += 1) {
+          if (pointDilationData[i] === pointDilationLabel) {
+            flags[i] = flagHighlight;
+          }
+        }
+      }
+      return flags;
+    }
+  );
+
+  computeColorByFlags = memoize((nObs, colorByData) => {
+    const flags = new Float32Array(nObs);
+    if (colorByData) {
+      for (let i = 0, len = flags.length; i < len; i += 1) {
+        if (!Number.isFinite(colorByData[i])) {
+          flags[i] = flagNaN;
+        }
+      }
+    }
+    return flags;
+  });
+
   computePointFlags = memoize(
-    (world, crossfilter, colorAccessor, pointDilation) => {
+    (crossfilter, colorByData, pointDilationData, pointDilationLabel) => {
       /*
       We communicate with the shader using three flags:
       - isNaN -- the value is a NaN. Only makes sense when we have a colorAccessor
@@ -139,213 +182,97 @@ class Graph extends React.Component {
       continuous metadata, as they rely on different tests, and some of the flags
       (eg, isNaN) are meaningless in the face of categorical metadata.
       */
+      const nObs = crossfilter.size();
+      const flags = new Float32Array(nObs);
 
-      const flagSelected = 1;
-      const flagNaN = 2;
-      const flagHighlight = 4;
-
-      const flags = this.computeSelectedFlags(
+      const selectedFlags = this.computeSelectedFlags(
         crossfilter,
         flagSelected,
         0
-      ).slice();
+      );
+      const highlightFlags = this.computeHighlightFlags(
+        nObs,
+        pointDilationData,
+        pointDilationLabel
+      );
+      const colorByFlags = this.computeColorByFlags(nObs, colorByData);
 
-      const { metadataField, categoryField } = pointDilation;
-      const highlightData = metadataField
-        ? world.obsAnnotations.col(metadataField)?.asArray()
-        : null;
-      const colorByColumn = colorAccessor
-        ? world.obsAnnotations.col(colorAccessor)?.asArray() ||
-          world.varData.col(colorAccessor)?.asArray()
-        : null;
-      const colorByData =
-        colorByColumn && isTypedArray(colorByColumn) ? colorByColumn : null;
-
-      if (colorByData || highlightData) {
-        for (let i = 0, len = flags.length; i < len; i += 1) {
-          if (highlightData) {
-            flags[i] += highlightData[i] === categoryField ? flagHighlight : 0;
-          }
-          if (colorByData) {
-            flags[i] += Number.isFinite(colorByData[i]) ? 0 : flagNaN;
-          }
-        }
+      for (let i = 0; i < nObs; i += 1) {
+        flags[i] = selectedFlags[i] + highlightFlags[i] + colorByFlags[i];
       }
+
       return flags;
     }
   );
 
   constructor(props) {
     super(props);
-    this.count = 0;
-    this.graphPaddingTop = 0;
-    this.graphPaddingRightLeft = globals.leftSidebarWidth * 2;
-    this.renderCache = {
-      X: null,
-      Y: null,
-      positions: null,
-      colors: null,
-      sizes: null,
-      flags: null
-    };
+    const viewport = this.getViewportDimensions();
+    this.reglCanvas = null;
+    this.cachedAsyncProps = null;
+    const modelTF = createModelTF();
     this.state = {
       toolSVG: null,
       tool: null,
       container: null,
-      cameraRender: 0
+      viewport,
+
+      // projection
+      camera: null,
+      modelTF,
+      modelInvTF: mat3.invert([], modelTF),
+      projectionTF: createProjectionTF(viewport.width, viewport.height),
+
+      // regl state
+      regl: null,
+      drawPoints: null,
+      pointBuffer: null,
+      colorBuffer: null,
+      flagBuffer: null,
+
+      // component rendering derived state - these must stay synchronized
+      // with the reducer state they were generated from.
+      layoutState: {
+        layoutDf: null,
+        layoutChoice: null,
+      },
+      colorState: {
+        colors: null,
+        colorDf: null,
+        colorTable: null,
+      },
+      pointDilationState: {
+        pointDilation: null,
+        pointDilationDf: null,
+      },
     };
   }
 
   componentDidMount() {
-    // setup canvas, webgl draw function and camera
-    const camera = _camera(this.reglCanvas);
-    const regl = _regl(this.reglCanvas);
-    const drawPoints = _drawPoints(regl);
-
-    // preallocate webgl buffers
-    const pointBuffer = regl.buffer();
-    const colorBuffer = regl.buffer();
-    const flagBuffer = regl.buffer();
-
-    // create all default rendering transformations
-    const modelTF = createModelTF();
-    const projectionTF = createProjectionTF(
-      this.reglCanvas.width,
-      this.reglCanvas.height
-    );
-
-    // initial draw to canvas
-    this.renderPoints(
-      regl,
-      drawPoints,
-      colorBuffer,
-      pointBuffer,
-      flagBuffer,
-      camera,
-      projectionTF
-    );
-
-    this.setState({
-      regl,
-      drawPoints,
-      pointBuffer,
-      colorBuffer,
-      flagBuffer,
-      camera,
-      modelTF,
-      modelInvTF: mat3.invert([], modelTF),
-      projectionTF
-    });
+    window.addEventListener("resize", this.handleResize);
   }
 
-  componentDidUpdate(prevProps) {
-    const { renderCache } = this;
+  componentDidUpdate(prevProps, prevState) {
     const {
-      world,
-      crossfilter,
-      colorRGB,
-      responsive,
       selectionTool,
       currentSelection,
-      layoutChoice,
       graphInteractionMode,
-      pointDilation,
-      colorAccessor
     } = this.props;
-    const { regl, toolSVG, camera, modelTF } = this.state;
+    const { toolSVG, viewport } = this.state;
+    const hasResized =
+      prevState.viewport.height !== viewport.height ||
+      prevState.viewport.width !== viewport.width;
     let stateChanges = {};
 
-    if (regl && world && crossfilter) {
-      /* update the regl and point rendering state */
-      const { obsLayout, nObs } = world;
-      const { drawPoints, pointBuffer, colorBuffer, flagBuffer } = this.state;
-
-      let { projectionTF } = this.state;
-      let needsRepaint = false;
-
-      if (
-        prevProps.responsive.height !== responsive.height ||
-        prevProps.responsive.width !== responsive.width
-      ) {
-        projectionTF = createProjectionTF(
-          this.reglCanvas.width,
-          this.reglCanvas.height
-        );
-        needsRepaint = true;
-        stateChanges = {
-          ...stateChanges,
-          projectionTF
-        };
-      }
-
-      /* coordinates for each point */
-      const X = obsLayout.col(layoutChoice.currentDimNames[0]).asArray();
-      const Y = obsLayout.col(layoutChoice.currentDimNames[1]).asArray();
-      const newPositions = this.computePointPositions(X, Y, modelTF);
-      if (renderCache.positions !== newPositions) {
-        /* update our cache & GL if the buffer changes */
-        renderCache.positions = newPositions;
-        pointBuffer({ data: newPositions, dimension: 2 });
-        needsRepaint = true;
-      }
-
-      /* colors for each point */
-      const newColors = this.computePointColors(colorRGB);
-      if (renderCache.colors !== newColors) {
-        /* update our cache & GL if the buffer changes */
-        renderCache.colors = newColors;
-        colorBuffer({ data: newColors, dimension: 3 });
-        needsRepaint = true;
-      }
-
-      /* flags for each point */
-      const newFlags = this.computePointFlags(
-        world,
-        crossfilter,
-        colorAccessor,
-        pointDilation
-      );
-      if (renderCache.flags !== newFlags) {
-        renderCache.flags = newFlags;
-        needsRepaint = true;
-        flagBuffer({ data: newFlags, dimension: 1 });
-      }
-
-      this.count = nObs;
-
-      if (needsRepaint) {
-        this.renderPoints(
-          regl,
-          drawPoints,
-          colorBuffer,
-          pointBuffer,
-          flagBuffer,
-          camera,
-          projectionTF
-        );
-      }
-    }
-
     if (
-      prevProps.responsive.height !== responsive.height ||
-      prevProps.responsive.width !== responsive.width
+      (viewport.height && viewport.width && !toolSVG) || // first time init
+      hasResized || //  window size has changed we want to recreate all SVGs
+      selectionTool !== prevProps.selectionTool || // change of selection tool
+      prevProps.graphInteractionMode !== graphInteractionMode // lasso/zoom mode is switched
     ) {
-      // If the window size has changed we want to recreate all SVGs
       stateChanges = {
         ...stateChanges,
-        ...this.createToolSVG()
-      };
-    } else if (
-      (responsive.height && responsive.width && !toolSVG) ||
-      selectionTool !== prevProps.selectionTool
-    ) {
-      // first time or change of selection tool
-      stateChanges = { ...stateChanges, ...this.createToolSVG() };
-    } else if (prevProps.graphInteractionMode !== graphInteractionMode) {
-      // If lasso/zoom is switched
-      stateChanges = {
-        ...stateChanges,
-        ...this.createToolSVG()
+        ...this.createToolSVG(),
       };
     }
 
@@ -365,16 +292,47 @@ class Graph extends React.Component {
       );
     }
     if (Object.keys(stateChanges).length > 0) {
+      // eslint-disable-next-line react/no-did-update-set-state --- Preventing update loop via stateChanges and diff checks
       this.setState(stateChanges);
     }
   }
 
-  handleCanvasEvent = e => {
+  componentWillUnmount() {
+    window.removeEventListener("resize", this.handleResize);
+  }
+
+  setReglCanvas = (canvas) => {
+    this.reglCanvas = canvas;
+    this.setState({
+      ...Graph.createReglState(canvas),
+    });
+  };
+
+  handleResize = () => {
+    const { state } = this.state;
+    const viewport = this.getViewportDimensions();
+    const projectionTF = createProjectionTF(viewport.width, viewport.height);
+    this.setState({
+      ...state,
+      viewport,
+      projectionTF,
+    });
+  };
+
+  getViewportDimensions = () => {
+    const { viewportRef } = this.props;
+    return {
+      height: viewportRef.clientHeight,
+      width: viewportRef.clientWidth,
+    };
+  };
+
+  handleCanvasEvent = (e) => {
     const { camera, projectionTF } = this.state;
     if (e.type !== "wheel") e.preventDefault();
     if (camera.handleEvent(e, projectionTF)) {
       this.renderCanvas();
-      this.setState(state => {
+      this.setState((state) => {
         return { ...state, updateOverlay: !state.updateOverlay };
       });
     }
@@ -385,13 +343,13 @@ class Graph extends React.Component {
     Called from componentDidUpdate. Create the tool SVG, and return any
     state changes that should be passed to setState().
     */
-    const { responsive, selectionTool, graphInteractionMode } = this.props;
+    const { selectionTool, graphInteractionMode } = this.props;
+    const { viewport } = this.state;
 
     /* clear out whatever was on the div, even if nothing, but usually the brushes etc */
-
-    d3.select("#lasso-layer")
-      .selectAll(".lasso-group")
-      .remove();
+    const lasso = d3.select("#lasso-layer");
+    if (lasso.empty()) return {}; // still initializing
+    lasso.selectAll(".lasso-group").remove();
 
     // Don't render or recreate toolSVG if currently in zoom mode
     if (graphInteractionMode !== "select") {
@@ -421,12 +379,93 @@ class Graph extends React.Component {
       handleDrag,
       handleEnd,
       handleCancel,
-      responsive,
-      this.graphPaddingRightLeft
+      viewport
     );
 
     return { toolSVG: newToolSVG, tool, container };
   };
+
+  fetchAsyncProps = async (props) => {
+    const {
+      annoMatrix,
+      colors: colorsProp,
+      layoutChoice,
+      crossfilter,
+      pointDilation,
+      viewport,
+    } = props.watchProps;
+    const { modelTF } = this.state;
+
+    const [layoutDf, colorDf, pointDilationDf] = await this.fetchData(
+      annoMatrix,
+      layoutChoice,
+      colorsProp,
+      pointDilation
+    );
+    const { currentDimNames } = layoutChoice;
+    const X = layoutDf.col(currentDimNames[0]).asArray();
+    const Y = layoutDf.col(currentDimNames[1]).asArray();
+    const positions = this.computePointPositions(X, Y, modelTF);
+
+    const colorTable = this.updateColorTable(colorsProp, colorDf);
+    const colors = this.computePointColors(colorTable.rgb);
+
+    const { colorAccessor } = colorsProp;
+    const colorByData = colorDf?.col(colorAccessor)?.asArray();
+    const {
+      metadataField: pointDilationCategory,
+      categoryField: pointDilationLabel,
+    } = pointDilation;
+    const pointDilationData = pointDilationDf
+      ?.col(pointDilationCategory)
+      ?.asArray();
+    const flags = this.computePointFlags(
+      crossfilter,
+      colorByData,
+      pointDilationData,
+      pointDilationLabel
+    );
+
+    const { width, height } = viewport;
+    return {
+      positions,
+      colors,
+      flags,
+      width,
+      height,
+    };
+  };
+
+  async fetchData(annoMatrix, layoutChoice, colors, pointDilation) {
+    /*
+    fetch all data needed.  Includes:
+      - the color by dataframe
+      - the layout dataframe
+      - the point dilation dataframe
+    */
+    const { metadataField: pointDilationAccessor } = pointDilation;
+
+    const promises = [];
+    // layout
+    promises.push(annoMatrix.fetch("emb", layoutChoice.current));
+
+    // color
+    const query = this.createColorByQuery(colors);
+    if (query) {
+      promises.push(annoMatrix.fetch(...query));
+    } else {
+      promises.push(Promise.resolve(null));
+    }
+
+    // point highlighting
+    if (pointDilationAccessor) {
+      promises.push(annoMatrix.fetch("obs", pointDilationAccessor));
+    } else {
+      promises.push(Promise.resolve(null));
+    }
+
+    return Promise.all(promises);
+  }
 
   brushToolUpdate(tool, container) {
     /*
@@ -443,7 +482,7 @@ class Graph extends React.Component {
         */
         const screenCoords = [
           this.mapPointToScreen(currentSelection.brushCoords.northwest),
-          this.mapPointToScreen(currentSelection.brushCoords.southeast)
+          this.mapPointToScreen(currentSelection.brushCoords.southeast),
         ];
         if (!toolCurrentSelection) {
           /* tool is not selected, so just move the brush */
@@ -480,7 +519,7 @@ class Graph extends React.Component {
       /*
       if there is a current selection, make sure the lasso tool matches
       */
-      const polygon = currentSelection.polygon.map(p =>
+      const polygon = currentSelection.polygon.map((p) =>
         this.mapPointToScreen(p)
       );
       tool.move(polygon);
@@ -514,14 +553,12 @@ class Graph extends React.Component {
     accounting for current pan/zoom camera.
     */
 
-    const { responsive } = this.props;
-    const { camera, projectionTF, modelInvTF } = this.state;
+    const { camera, projectionTF, modelInvTF, viewport } = this.state;
     const cameraInvTF = camera.invView();
 
     /* screen -> gl */
-    const x =
-      (2 * pin[0]) / (responsive.width - this.graphPaddingRightLeft) - 1;
-    const y = 2 * (1 - pin[1] / (responsive.height - this.graphPaddingTop)) - 1;
+    const x = (2 * pin[0]) / viewport.width - 1;
+    const y = 2 * (1 - pin[1] / viewport.height) - 1;
 
     const xy = vec2.fromValues(x, y);
     const projectionInvTF = mat3.invert(mat3.create(), projectionTF);
@@ -537,23 +574,17 @@ class Graph extends React.Component {
     of mapScreenToPoint()
     */
 
-    const { responsive } = this.props;
-    const { camera, projectionTF, modelTF } = this.state;
+    const { camera, projectionTF, modelTF, viewport } = this.state;
     const cameraTF = camera.view();
 
     const xy = vec2.transformMat3(vec2.create(), xyCell, modelTF);
     vec2.transformMat3(xy, xy, cameraTF);
     vec2.transformMat3(xy, xy, projectionTF);
 
-    const pin = [
-      Math.round(
-        ((xy[0] + 1) * (responsive.width - this.graphPaddingRightLeft)) / 2
-      ),
-      Math.round(
-        -((xy[1] + 1) / 2 - 1) * (responsive.height - this.graphPaddingTop)
-      )
+    return [
+      Math.round(((xy[0] + 1) * viewport.width) / 2),
+      Math.round(-((xy[1] + 1) / 2 - 1) * viewport.height),
     ];
-    return pin;
   }
 
   handleBrushDragAction() {
@@ -567,17 +598,22 @@ class Graph extends React.Component {
     // ignore programatically generated events
     if (d3.event.sourceEvent === null || !d3.event.selection) return;
 
-    const { dispatch } = this.props;
+    const { dispatch, layoutChoice } = this.props;
     const s = d3.event.selection;
-    const brushCoords = {
-      northwest: this.mapScreenToPoint([s[0][0], s[0][1]]),
-      southeast: this.mapScreenToPoint([s[1][0], s[1][1]])
-    };
-
-    dispatch({
-      type: "graph brush change",
-      brushCoords
-    });
+    const northwest = this.mapScreenToPoint(s[0]);
+    const southeast = this.mapScreenToPoint(s[1]);
+    const [minX, maxY] = northwest;
+    const [maxX, minY] = southeast;
+    dispatch(
+      actions.graphBrushChangeAction(layoutChoice.current, {
+        minX,
+        minY,
+        maxX,
+        maxY,
+        northwest,
+        southeast,
+      })
+    );
   }
 
   handleBrushStartAction() {
@@ -585,7 +621,7 @@ class Graph extends React.Component {
     if (!d3.event.sourceEvent) return;
 
     const { dispatch } = this.props;
-    dispatch({ type: "graph brush start" });
+    dispatch(actions.graphBrushStartAction());
   }
 
   handleBrushEndAction() {
@@ -596,65 +632,67 @@ class Graph extends React.Component {
     coordinates will be included if selection made, null
     if selection cleared.
     */
-    const { dispatch } = this.props;
+    const { dispatch, layoutChoice } = this.props;
     const s = d3.event.selection;
     if (s) {
-      const brushCoords = {
-        northwest: this.mapScreenToPoint(s[0]),
-        southeast: this.mapScreenToPoint(s[1])
-      };
-      dispatch({
-        type: "graph brush end",
-        brushCoords
-      });
+      const northwest = this.mapScreenToPoint(s[0]);
+      const southeast = this.mapScreenToPoint(s[1]);
+      const [minX, maxY] = northwest;
+      const [maxX, minY] = southeast;
+      dispatch(
+        actions.graphBrushEndAction(layoutChoice.current, {
+          minX,
+          minY,
+          maxX,
+          maxY,
+          northwest,
+          southeast,
+        })
+      );
     } else {
-      dispatch({
-        type: "graph brush deselect"
-      });
+      dispatch(actions.graphBrushDeselectAction(layoutChoice.current));
     }
   }
 
   handleBrushDeselectAction() {
-    const { dispatch } = this.props;
-    dispatch({
-      type: "graph brush deselect"
-    });
+    const { dispatch, layoutChoice } = this.props;
+    dispatch(actions.graphBrushDeselectAction(layoutChoice.current));
   }
 
   handleLassoStart() {
-    const { dispatch } = this.props;
-    dispatch({
-      type: "graph lasso start"
-    });
+    const { dispatch, layoutChoice } = this.props;
+    dispatch(actions.graphLassoStartAction(layoutChoice.current));
   }
 
   // when a lasso is completed, filter to the points within the lasso polygon
   handleLassoEnd(polygon) {
     const minimumPolygonArea = 10;
-    const { dispatch } = this.props;
+    const { dispatch, layoutChoice } = this.props;
 
     if (
       polygon.length < 3 ||
       Math.abs(d3.polygonArea(polygon)) < minimumPolygonArea
     ) {
       // if less than three points, or super small area, treat as a clear selection.
-      dispatch({ type: "graph lasso deselect" });
+      dispatch(actions.graphLassoDeselectAction(layoutChoice.current));
     } else {
-      dispatch({
-        type: "graph lasso end",
-        polygon: polygon.map(xy => this.mapScreenToPoint(xy)) // transform the polygon
-      });
+      dispatch(
+        actions.graphLassoEndAction(
+          layoutChoice.current,
+          polygon.map((xy) => this.mapScreenToPoint(xy))
+        )
+      );
     }
   }
 
   handleLassoCancel() {
-    const { dispatch } = this.props;
-    dispatch({ type: "graph lasso cancel" });
+    const { dispatch, layoutChoice } = this.props;
+    dispatch(actions.graphLassoCancelAction(layoutChoice.current));
   }
 
   handleLassoDeselectAction() {
-    const { dispatch } = this.props;
-    dispatch({ type: "graph lasso deselect" });
+    const { dispatch, layoutChoice } = this.props;
+    dispatch(actions.graphLassoDeselectAction(layoutChoice.current));
   }
 
   handleDeselectAction() {
@@ -667,40 +705,8 @@ class Graph extends React.Component {
     const { dispatch } = this.props;
     dispatch({
       type: "change opacity deselected cells in 2d graph background",
-      data: e.target.value
+      data: e.target.value,
     });
-  }
-
-  renderPoints(
-    regl,
-    drawPoints,
-    colorBuffer,
-    pointBuffer,
-    flagBuffer,
-    camera,
-    projectionTF
-  ) {
-    const { universe } = this.props;
-    if (!this.reglCanvas || !universe) return;
-    const cameraTF = camera.view();
-    const projView = mat3.multiply(mat3.create(), projectionTF, cameraTF);
-    const { width, height } = this.reglCanvas;
-    regl.poll();
-    regl.clear({
-      depth: 1,
-      color: [1, 1, 1, 1]
-    });
-    drawPoints({
-      distance: camera.distance(),
-      color: colorBuffer,
-      position: pointBuffer,
-      flag: flagBuffer,
-      count: this.count,
-      projView,
-      nPoints: universe.nObs,
-      minViewportDimension: Math.min(width || 800, height || 600)
-    });
-    regl._gl.flush();
   }
 
   renderCanvas = renderThrottle(() => {
@@ -711,7 +717,7 @@ class Graph extends React.Component {
       pointBuffer,
       flagBuffer,
       camera,
-      projectionTF
+      projectionTF,
     } = this.state;
     this.renderPoints(
       regl,
@@ -724,70 +730,235 @@ class Graph extends React.Component {
     );
   });
 
-  render() {
-    const { responsive, graphInteractionMode } = this.props;
-    const { modelTF, projectionTF, camera } = this.state;
+  updateReglAndRender(asyncProps) {
+    const { positions, colors, flags } = asyncProps;
+    this.cachedAsyncProps = asyncProps;
+    const { pointBuffer, colorBuffer, flagBuffer } = this.state;
+    pointBuffer({ data: positions, dimension: 2 });
+    colorBuffer({ data: colors, dimension: 3 });
+    flagBuffer({ data: flags, dimension: 1 });
+    this.renderCanvas();
+  }
 
+  updateColorTable(colors, colorDf) {
+    const { annoMatrix } = this.props;
+    const { schema } = annoMatrix;
+
+    /* update color table state */
+    if (!colors || !colorDf) {
+      return createColorTable(
+        null, // default mode
+        null,
+        null,
+        schema,
+        null
+      );
+    }
+
+    const { colorAccessor, userColors, colorMode } = colors;
+    return createColorTable(
+      colorMode,
+      colorAccessor,
+      colorDf,
+      schema,
+      userColors
+    );
+  }
+
+  createColorByQuery(colors) {
+    const { annoMatrix } = this.props;
+    const { schema } = annoMatrix;
+    const { colorMode, colorAccessor } = colors;
+    return createColorQuery(colorMode, colorAccessor, schema);
+  }
+
+  renderPoints(
+    regl,
+    drawPoints,
+    colorBuffer,
+    pointBuffer,
+    flagBuffer,
+    camera,
+    projectionTF
+  ) {
+    const { annoMatrix } = this.props;
+    if (!this.reglCanvas || !annoMatrix) return;
+
+    const { schema } = annoMatrix;
+    const cameraTF = camera.view();
+    const projView = mat3.multiply(mat3.create(), projectionTF, cameraTF);
+    const { width, height } = this.reglCanvas;
+    regl.poll();
+    regl.clear({
+      depth: 1,
+      color: [1, 1, 1, 1],
+    });
+    drawPoints({
+      distance: camera.distance(),
+      color: colorBuffer,
+      position: pointBuffer,
+      flag: flagBuffer,
+      count: annoMatrix.nObs,
+      projView,
+      nPoints: schema.dataframe.nObs,
+      minViewportDimension: Math.min(width, height),
+    });
+    regl._gl.flush();
+  }
+
+  render() {
+    const {
+      graphInteractionMode,
+      annoMatrix,
+      colors,
+      layoutChoice,
+      pointDilation,
+      crossfilter,
+    } = this.props;
+    const { modelTF, projectionTF, camera, viewport, regl } = this.state;
     const cameraTF = camera?.view()?.slice();
 
     return (
-      <div id="graphWrapper">
-        <div
+      <div
+        id="graph-wrapper"
+        style={{
+          position: "relative",
+          top: 0,
+          left: 0,
+        }}
+      >
+        <GraphOverlayLayer
+          width={viewport.width}
+          height={viewport.height}
+          cameraTF={cameraTF}
+          modelTF={modelTF}
+          projectionTF={projectionTF}
+          handleCanvasEvent={
+            graphInteractionMode === "zoom" ? this.handleCanvasEvent : undefined
+          }
+        >
+          <CentroidLabels />
+        </GraphOverlayLayer>
+        <svg
+          id="lasso-layer"
+          data-testid="layout-overlay"
+          className="graph-svg"
           style={{
-            zIndex: -9999,
-            position: "fixed",
-            top: this.graphPaddingTop,
-            right: globals.leftSidebarWidth
+            position: "absolute",
+            top: 0,
+            left: 0,
+            zIndex: 1,
+          }}
+          width={viewport.width}
+          height={viewport.height}
+          pointerEvents={graphInteractionMode === "select" ? "auto" : "none"}
+        />
+        <canvas
+          width={viewport.width}
+          height={viewport.height}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            padding: 0,
+            margin: 0,
+            shapeRendering: "crispEdges",
+          }}
+          className="graph-canvas"
+          data-testid="layout-graph"
+          ref={this.setReglCanvas}
+          onMouseDown={this.handleCanvasEvent}
+          onMouseUp={this.handleCanvasEvent}
+          onMouseMove={this.handleCanvasEvent}
+          onDoubleClick={this.handleCanvasEvent}
+          onWheel={this.handleCanvasEvent}
+        />
+
+        <Async
+          watchFn={Graph.watchAsync}
+          promiseFn={this.fetchAsyncProps}
+          watchProps={{
+            annoMatrix,
+            colors,
+            layoutChoice,
+            pointDilation,
+            crossfilter,
+            viewport,
           }}
         >
-          <div id="graphAttachPoint">
-            <GraphOverlayLayer
-              cameraTF={cameraTF}
-              modelTF={modelTF}
-              projectionTF={projectionTF}
-              graphPaddingRightLeft={this.graphPaddingRightLeft}
-              graphPaddingTop={this.graphPaddingTop}
-              responsive={responsive}
-              handleCanvasEvent={
-                graphInteractionMode === "zoom"
-                  ? this.handleCanvasEvent
-                  : undefined
-              }
-            >
-              <CentroidLabels />
-            </GraphOverlayLayer>
-
-            <svg
-              id="lasso-layer"
-              data-testid="layout-overlay"
-              className={styles.graphSVG}
-              width={responsive.width - this.graphPaddingRightLeft}
-              height={responsive.height}
-              pointerEvents={
-                graphInteractionMode === "select" ? "auto" : "none"
-              }
-              style={{ zIndex: 89 }}
+          <Async.Pending initial>
+            <StillLoading
+              displayName={layoutChoice.current}
+              width={viewport.width}
+              height={viewport.height}
             />
-          </div>
-          <div style={{ padding: 0, margin: 0 }}>
-            <canvas
-              width={responsive.width - this.graphPaddingRightLeft}
-              height={responsive.height - this.graphPaddingTop}
-              data-testid="layout-graph"
-              ref={canvas => {
-                this.reglCanvas = canvas;
-              }}
-              onMouseDown={this.handleCanvasEvent}
-              onMouseUp={this.handleCanvasEvent}
-              onMouseMove={this.handleCanvasEvent}
-              onDoubleClick={this.handleCanvasEvent}
-              onWheel={this.handleCanvasEvent}
-            />
-          </div>
-        </div>
+          </Async.Pending>
+          <Async.Rejected>
+            {(error) => (
+              <ErrorLoading
+                displayName={layoutChoice.current}
+                error={error}
+                width={viewport.width}
+                height={viewport.height}
+              />
+            )}
+          </Async.Rejected>
+          <Async.Fulfilled>
+            {(asyncProps) => {
+              if (regl && !shallowEqual(asyncProps, this.cachedAsyncProps)) {
+                this.updateReglAndRender(asyncProps);
+              }
+              return null;
+            }}
+          </Async.Fulfilled>
+        </Async>
       </div>
     );
   }
 }
+
+const ErrorLoading = ({ displayName, error, width, height }) => {
+  console.log(error); // log to console as this is an unepected error
+  return (
+    <div
+      style={{
+        position: "fixed",
+        fontWeight: 500,
+        top: height / 2,
+        left: globals.leftSidebarWidth + width / 2 - 50,
+      }}
+    >
+      <span>{`Failure loading ${displayName}`}</span>
+    </div>
+  );
+};
+
+const StillLoading = ({ displayName, width, height }) => {
+  /*
+  Render a busy/loading indicator
+  */
+  return (
+    <div
+      style={{
+        position: "fixed",
+        fontWeight: 500,
+        top: height / 2,
+        width,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "center",
+          justifyItems: "center",
+          alignItems: "center",
+        }}
+      >
+        <Button minimal loading intent="primary" />
+        <span style={{ fontStyle: "italic" }}>Loading {displayName}</span>
+      </div>
+    </div>
+  );
+};
 
 export default Graph;

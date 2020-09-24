@@ -9,14 +9,13 @@ about commonly used names.  Preferentially, pick in the following order:
 */
 function bestDefaultLayout(layouts) {
   const preferredNames = ["umap", "tsne", "pca"];
-  const idx = preferredNames.findIndex(name => layouts.indexOf(name) !== -1);
+  const idx = preferredNames.findIndex((name) => layouts.indexOf(name) !== -1);
   if (idx !== -1) return preferredNames[idx];
   return layouts[0];
 }
 
-function setToDefaultLayout(world) {
-  const { schema } = world;
-  const available = schema.layout.obs.map(v => v.name).sort();
+function setToDefaultLayout(schema) {
+  const available = schema.layout.obs.map((v) => v.name).sort();
   const current = bestDefaultLayout(available);
   const currentDimNames = schema.layout.obsByName[current].dims;
   return { available, current, currentDimNames };
@@ -26,50 +25,38 @@ const LayoutChoice = (
   state = {
     available: [], // all available choices
     current: undefined, // name of the current layout, eg, 'umap'
-    currentDimNames: [] // dimension name
+    currentDimNames: [], // dimension name
   },
   action,
   nextSharedState
 ) => {
   switch (action.type) {
-    case "universe exists, but loading is still in progress": {
+    case "initial data load complete": {
       // set default to default
-      const { universe } = nextSharedState;
+      const { annoMatrix } = nextSharedState;
       return {
         ...state,
-        ...setToDefaultLayout(universe)
+        ...setToDefaultLayout(annoMatrix.schema),
       };
     }
 
     case "set layout choice": {
-      const { schema } = nextSharedState.world;
+      const { schema } = nextSharedState.annoMatrix;
       const current = action.layoutChoice;
       const currentDimNames = schema.layout.obsByName[current].dims;
       return { ...state, current, currentDimNames };
     }
 
     case "reembed: add reembedding": {
-      const name = action.schema.name;
+      const { schema } = nextSharedState.annoMatrix;
+      const { name } = action.schema;
       const available = Array.from(new Set(state.available).add(name));
+      const currentDimNames = schema.layout.obsByName[name].dims;
       return {
         ...state,
-        available
-      };
-    }
-
-    case "reembed: clear all reembeddings": {
-      const { universe } = nextSharedState;
-      const { current } = state;
-      const dflt = setToDefaultLayout(universe);
-      if (dflt.available.includes(current)) {
-        return {
-          ...state,
-          available: dflt.available
-        };
-      }
-      return {
-        ...state,
-        ...dflt
+        available,
+        current: name,
+        currentDimNames,
       };
     }
 

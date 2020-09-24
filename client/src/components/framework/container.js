@@ -1,11 +1,22 @@
 // jshint esversion: 6
 import React from "react";
 
-import styles from "./container.css";
-
-const Container = props => {
+function Container(props) {
   const { children } = props;
-  return <div className={styles.container}>{children}</div>;
-};
+  return (
+    <div
+      className="container"
+      style={{
+        height: "calc(100vh - (100vh - 100%))",
+        width: "calc(100vw - (100vw - 100%))",
+        position: "absolute",
+        top: 0,
+        left: 0,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 
 export default Container;

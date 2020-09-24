@@ -19,12 +19,14 @@ venv/
 cellxgene/
 
 # client build
-server/common/web/static/css/
-server/common/web/static/img/
-server/common/web/static/media/
-server/common/web/static/fonts/
-server/common/web/static/js/
-server/common/web/templates/index\.html
+server/common/web/static/*
+server/common/web/templates/
+server/common/web/csp-hashes.json
+
+# eb build
+artifact.dir
+artifact.zip
+customize
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -41,7 +43,14 @@ npm-debug.log
 __pycache__
 *.DS_Store*
 data
+tags
+myconfig.yaml
 
 # Jekyll
 docs/_site/
 docs/Gemfile.lock
+
+client/.eslintcache
+
+# E2E Testing
+ignoreE2E*

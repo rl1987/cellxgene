@@ -23,10 +23,10 @@ const Controls = (
     scatterplotXXaccessor: null, // just easier to read
     scatterplotYYaccessor: null,
     graphRenderCounter: 0 /* integer as <Component key={graphRenderCounter} - a change in key forces a remount */,
+
+    datasetDrawer: false,
   },
-  action,
-  nextSharedState,
-  prevSharedState
+  action
 ) => {
   /*
   For now, log anything looking like an error to the console.
@@ -36,37 +36,10 @@ const Controls = (
   }
 
   switch (action.type) {
-    /*****************************************************
-          Initialization, World/Universe management
-          and data loading.
-    ******************************************************/
     case "initial data load start": {
       return { ...state, loading: true };
     }
-    case "universe: column load success": {
-      /* 
-      we are in a loading state until the following are true:
-        * universe exists (if partially)
-        * embeddings (obsLayout) are loaded
-        * varAnnotations index is loaded
-      */
-      const universeExists = !!nextSharedState.universe;
-      const embeddingsExist =
-        !nextSharedState.universe?.obsLayout?.isEmpty() ?? false;
-      const varIndex = nextSharedState.universe.schema.annotations.var.index;
-      const varAnnotationsIndexExists =
-        universeExists &&
-        nextSharedState.universe.varAnnotations.hasCol(varIndex);
-      return {
-        ...state,
-        loading: !(
-          universeExists &&
-          embeddingsExist &&
-          varAnnotationsIndexExists
-        ),
-      };
-    }
-    case "initial data load complete (universe exists)": {
+    case "initial data load complete": {
       /* now fully loaded */
       return {
         ...state,
@@ -75,7 +48,7 @@ const Controls = (
         resettingInterface: false,
       };
     }
-    case "reset World to eq Universe": {
+    case "reset subset": {
       const [newUserDefinedGenes, newDiffExpGenes] = subsetAndResetGeneLists(
         state
       );
@@ -86,7 +59,7 @@ const Controls = (
         diffexpGenes: newDiffExpGenes,
       };
     }
-    case "set World to current selection": {
+    case "subset to selection": {
       const [newUserDefinedGenes, newDiffExpGenes] = subsetAndResetGeneLists(
         state
       );
@@ -143,15 +116,10 @@ const Controls = (
     }
 
     case "request differential expression success": {
-      const { world } = prevSharedState;
-      const varIndexName = world.schema.annotations.var.index;
-      const _diffexpGenes = [];
-      action.data.forEach((d) => {
-        _diffexpGenes.push(world.varAnnotations.at(d[0], varIndexName));
-      });
+      const diffexpGenes = action.data.map((v) => v[0]);
       return {
         ...state,
-        diffexpGenes: _diffexpGenes,
+        diffexpGenes,
       };
     }
     case "clear differential expression": {
@@ -169,12 +137,6 @@ const Controls = (
       return {
         ...state,
         userDefinedGenes: newUserDefinedGenes,
-      };
-    }
-    case "clear all user defined genes": {
-      return {
-        ...state,
-        userDefinedGenes: [],
       };
     }
     case "initial data load error": {
@@ -205,12 +167,6 @@ const Controls = (
         graphRenderCounter: c,
       };
     }
-    case "interface reset started": {
-      return {
-        ...state,
-        resettingInterface: true,
-      };
-    }
 
     /*******************************
               Scatterplot
@@ -231,6 +187,12 @@ const Controls = (
         scatterplotXXaccessor: null,
         scatterplotYYaccessor: null,
       };
+
+    /**************************
+          Dataset Drawer
+     **************************/
+    case "toggle dataset drawer":
+      return { ...state, datasetDrawer: !state.datasetDrawer };
 
     default:
       return state;

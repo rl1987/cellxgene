@@ -1,19 +1,20 @@
 const GraphSelection = (
   state = {
     tool: "lasso", // what selection tool mode (lasso, brush, ...)
-    selection: { mode: "all" } // current selection, which is tool specific
+    selection: { mode: "all" }, // current selection, which is tool specific
   },
   action
 ) => {
   switch (action.type) {
     case "set clip quantiles":
-    case "reset World to eq Universe":
+    case "subset to selection":
+    case "reset subset":
     case "set layout choice": {
       return {
         ...state,
         selection: {
-          mode: "all"
-        }
+          mode: "all",
+        },
       };
     }
 
@@ -24,8 +25,8 @@ const GraphSelection = (
         ...state,
         selection: {
           mode: "within-rect",
-          brushCoords
-        }
+          brushCoords,
+        },
       };
     }
 
@@ -35,8 +36,8 @@ const GraphSelection = (
         ...state,
         selection: {
           mode: "within-polygon",
-          polygon
-        }
+          polygon,
+        },
       };
     }
 
@@ -47,8 +48,8 @@ const GraphSelection = (
       return {
         ...state,
         selection: {
-          mode: "all"
-        }
+          mode: "all",
+        },
       };
     }
 

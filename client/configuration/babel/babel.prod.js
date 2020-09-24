@@ -1,8 +1,15 @@
 module.exports = {
   babelrc: false,
   presets: [
-    ["modern-browsers", { loose: true, modules: false }],
-    "@babel/preset-react"
+    [
+      "@babel/preset-env",
+      {
+        useBuiltIns: "entry",
+        corejs: 3,
+        modules: false,
+      },
+    ],
+    "@babel/preset-react",
   ],
   plugins: [
     "@babel/plugin-proposal-function-bind",
@@ -12,6 +19,6 @@ module.exports = {
     "@babel/plugin-transform-react-constant-elements",
     "@babel/plugin-transform-runtime",
     "@babel/plugin-proposal-optional-chaining",
-    "@babel/plugin-proposal-nullish-coalescing-operator"
-  ]
+    "@babel/plugin-proposal-nullish-coalescing-operator",
+  ],
 };

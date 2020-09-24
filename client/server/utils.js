@@ -1,8 +1,6 @@
-/* eslint-disable */
-// jshint esversion: 6
-var chalk = require("chalk");
+const chalk = require("chalk");
 
-var friendlySyntaxErrorLabel = "Syntax error:";
+const friendlySyntaxErrorLabel = "Syntax error:";
 
 function isLikelyASyntaxError(message) {
   return message.indexOf(friendlySyntaxErrorLabel) !== -1;
@@ -15,31 +13,31 @@ function formatMessage(message) {
       /Module not found: Error: Cannot resolve 'file' or 'directory'/,
       "Module not found:"
     )
-    .replace(/^\s*at\s.*:\d+:\d+[\s\)]*\n/gm, "")
+    .replace(/^\s*at\s.*:\d+:\d+[\s)]*\n/gm, "")
     .replace("./~/css-loader!./~/postcss-loader!", "");
 }
-var clearConsole = () => {
+const clearConsole = () => {
   process.stdout.write("\x1bc");
 };
 
-var formatStats = (stats, port) => {
+const formatStats = (stats, port) => {
   clearConsole();
-  var hasErrors = stats.hasErrors();
-  var hasWarnings = stats.hasWarnings();
+  const hasErrors = stats.hasErrors();
+  const hasWarnings = stats.hasWarnings();
   if (!hasErrors && !hasWarnings) {
     console.log(chalk.green("Compiled successfully!"));
     console.log();
-    console.log("The app is running at http://localhost:" + port + "/");
+    console.log(`The app is running at http://localhost:${port}/`);
     console.log();
     return;
   }
 
-  var json = stats.toJson();
-  var formattedErrors = json.errors.map(
-    message => "Error in " + formatMessage(message)
+  const json = stats.toJson();
+  let formattedErrors = json.errors.map(
+    (message) => `Error in ${formatMessage(message)}`
   );
-  var formattedWarnings = json.warnings.map(
-    message => "Warning in " + formatMessage(message)
+  const formattedWarnings = json.warnings.map(
+    (message) => `Warning in ${formatMessage(message)}`
   );
 
   if (hasErrors) {
@@ -48,7 +46,7 @@ var formatStats = (stats, port) => {
     if (formattedErrors.some(isLikelyASyntaxError)) {
       formattedErrors = formattedErrors.filter(isLikelyASyntaxError);
     }
-    formattedErrors.forEach(message => {
+    formattedErrors.forEach((message) => {
       console.log(message);
       console.log();
     });
@@ -58,23 +56,23 @@ var formatStats = (stats, port) => {
   if (hasWarnings) {
     console.log(chalk.yellow("Compiled with warnings."));
     console.log();
-    formattedWarnings.forEach(message => {
+    formattedWarnings.forEach((message) => {
       console.log(message);
       console.log();
     });
 
     console.log("You may use special comments to disable some warnings.");
     console.log(
-      "Use " +
-        chalk.yellow("// eslint-disable-next-line") +
-        " to ignore the next line."
+      `Use ${chalk.yellow(
+        "// eslint-disable-next-line"
+      )} to ignore the next line.`
     );
     console.log(
-      "Use " +
-        chalk.yellow("/* eslint-disable */") +
-        " to ignore all warnings in a file."
+      `Use ${chalk.yellow(
+        "/* eslint-disable */"
+      )} to ignore all warnings in a file.`
     );
   }
 };
 
-module.exports = { formatStats: formatStats, clearConsole: clearConsole };
+module.exports = { formatStats, clearConsole };

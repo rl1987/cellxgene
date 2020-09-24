@@ -25,7 +25,8 @@ const Annotations = (
     isEditingLabelName: false,
     categoryBeingEdited: null,
     categoryAddingNewLabel: null,
-    labelEditable: { category: null, label: null }
+    labelEditable: { category: null, label: null },
+    promptForFilename: true,
   },
   action
 ) => {
@@ -37,10 +38,13 @@ const Annotations = (
         action.config.parameters?.[
           "annotations-data-collection-name-is-read-only"
         ] ?? false;
+      const promptForFilename =
+        action.config.parameters?.["user_annotation_collection_name_enabled"];
       return {
         ...state,
         dataCollectionNameIsReadOnly,
-        dataCollectionName
+        dataCollectionName,
+        promptForFilename,
       };
     }
 
@@ -50,7 +54,7 @@ const Annotations = (
       }
       return {
         ...state,
-        dataCollectionName: action.data
+        dataCollectionName: action.data,
       };
     }
 
@@ -59,7 +63,7 @@ const Annotations = (
       return {
         ...state,
         isAddingNewLabel: true,
-        categoryAddingNewLabel: action.data
+        categoryAddingNewLabel: action.data,
       };
     }
 
@@ -67,7 +71,7 @@ const Annotations = (
       return {
         ...state,
         isAddingNewLabel: false,
-        categoryAddingNewLabel: null
+        categoryAddingNewLabel: null,
       };
     }
 
@@ -75,7 +79,7 @@ const Annotations = (
       return {
         ...state,
         isEditingCategoryName: true,
-        categoryBeingEdited: action.data
+        categoryBeingEdited: action.data,
       };
     }
 
@@ -83,7 +87,7 @@ const Annotations = (
       return {
         ...state,
         isEditingCategoryName: false,
-        categoryBeingEdited: null
+        categoryBeingEdited: null,
       };
     }
 
@@ -94,8 +98,8 @@ const Annotations = (
         isEditingLabelName: true,
         labelEditable: {
           category: action.metadataField,
-          label: action.categoryIndex
-        }
+          label: action.categoryIndex,
+        },
       };
     }
 
@@ -103,7 +107,7 @@ const Annotations = (
       return {
         ...state,
         isEditingLabelName: false,
-        labelEditable: { category: null, label: null }
+        labelEditable: { category: null, label: null },
       };
     }
 

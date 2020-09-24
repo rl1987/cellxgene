@@ -8,11 +8,10 @@ const stateKey = "@@undoable/filterState";
 these actions will not affect history
 */
 const skipOnActions = new Set([
+  "annoMatrix: init complete",
   "url changed",
-  "interface reset started",
   "initial data load start",
-  "universe: column load success",
-  "universe exists, but loading is still in progress",
+  "universe: user color load success",
   "configuration load complete",
   "increment graph render counter",
   "window resize",
@@ -22,16 +21,7 @@ const skipOnActions = new Set([
   "graph brush change",
   "continuous metadata histogram brush",
 
-  "expression load start",
-  "expression load success",
-  "expression load error",
-
-  "request user defined gene started",
   "request user defined gene success",
-  "clear all user defined genes",
-
-  "get single gene expression for coloring started",
-  "get single gene expression for coloring error",
 
   "category value mouse hover start",
   "category value mouse hover end",
@@ -48,7 +38,7 @@ const skipOnActions = new Set([
   "annotation: disable category edit mode",
   "annotation: activate edit label mode",
   "annotation: cancel edit label mode",
-  "set annotations collection name"
+  "set annotations collection name",
 ]);
 
 /*
@@ -61,8 +51,7 @@ const debounceOnActions = new Set([]);
 history will be cleared when these actions occur
 */
 const clearOnActions = new Set([
-  "initial data load complete (universe exists)",
-  "reset World to eq Universe",
+  "initial data load complete",
   "initial data load error",
 ]);
 
@@ -87,7 +76,7 @@ const saveOnActions = new Set([
   "store current cell selection as differential set 1",
   "store current cell selection as differential set 2",
 
-  "set World to current selection",
+  "subset to selection",
   "set clip quantiles",
 
   "set layout choice",
@@ -100,7 +89,7 @@ const saveOnActions = new Set([
   "annotation: label edited",
   "annotation: label current cell selection",
   "annotation: delete label",
-  "annotation: category edited"
+  "annotation: category edited",
 ]);
 
 /**
@@ -114,26 +103,26 @@ See graph definition for the transitions that use each.
 
 Signature:  (fsm, transition, reducerState, reducerAction) => undoableAction
 */
-const stashPending = fsm => ({
+const stashPending = (fsm) => ({
   [actionKey]: "stashPending",
-  [stateKey]: { fsm }
+  [stateKey]: { fsm },
 });
 const cancelPending = () => ({
   [actionKey]: "cancelPending",
-  [stateKey]: { fsm: null }
+  [stateKey]: { fsm: null },
 });
 const applyPending = () => ({
   [actionKey]: "applyPending",
-  [stateKey]: { fsm: null }
+  [stateKey]: { fsm: null },
 });
 const skip = (fsm, transition) => ({
   [actionKey]: "skip",
-  [stateKey]: { fsm: transition.to !== "done" ? fsm : null }
+  [stateKey]: { fsm: transition.to !== "done" ? fsm : null },
 });
 const clear = () => ({ [actionKey]: "clear", [stateKey]: { fsm: null } });
 const save = (fsm, transition) => ({
   [actionKey]: "save",
-  [stateKey]: { fsm: transition.to !== "done" ? fsm : null }
+  [stateKey]: { fsm: transition.to !== "done" ? fsm : null },
 });
 
 /*
@@ -170,11 +159,11 @@ Basic approach:
   * only implement complex state machines where absolutely required (eg,
     multi-event seleciton and the like)
 */
-const actionFilter = debug => (state, action, prevFilterState) => {
+const actionFilter = (debug) => (state, action, prevFilterState) => {
   const actionType = action.type;
   const filterState = {
     ...prevFilterState,
-    prevAction: action
+    prevAction: action,
   };
   if (skipOnActions.has(actionType)) {
     return { [actionKey]: "skip", [stateKey]: filterState };
@@ -245,7 +234,7 @@ const debug = false;
 const undoableConfig = {
   debug,
   historyLimit: 50, // maximum history size
-  actionFilter: actionFilter(debug)
+  actionFilter: actionFilter(debug),
 };
 
 /*
@@ -257,9 +246,9 @@ if (debug) {
   Confirm no intersection between the various trivial rejection action filters
   */
   if (
-    new Set([...skipOnActions].filter(x => clearOnActions.has(x))).size > 0 ||
-    new Set([...skipOnActions].filter(x => saveOnActions.has(x))).size > 0 ||
-    new Set([...clearOnActions].filter(x => saveOnActions.has(x))).size > 0
+    new Set([...skipOnActions].filter((x) => clearOnActions.has(x))).size > 0 ||
+    new Set([...skipOnActions].filter((x) => saveOnActions.has(x))).size > 0 ||
+    new Set([...clearOnActions].filter((x) => saveOnActions.has(x))).size > 0
   ) {
     console.error(
       "Undoable misconfiguration - action filters have redundant events"
@@ -274,10 +263,10 @@ if (debug) {
   const trivialFilters = new Set([
     ...skipOnActions,
     ...clearOnActions,
-    ...saveOnActions
+    ...saveOnActions,
   ]);
   const trivialOverlapWithFsm = new Set(
-    [...trivialFilters].filter(x => seedFsm.events.has(x))
+    [...trivialFilters].filter((x) => seedFsm.events.has(x))
   );
   if (trivialOverlapWithFsm.size > 0) {
     console.error(

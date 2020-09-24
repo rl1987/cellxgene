@@ -1,35 +1,19 @@
-// jshint esversion: 6
 import React from "react";
 import { connect } from "react-redux";
-import {
-  Popover,
-  Button,
-  ButtonGroup,
-  AnchorButton,
-  Tooltip,
-  Position
-} from "@blueprintjs/core";
+import { Button, ButtonGroup, AnchorButton, Tooltip } from "@blueprintjs/core";
 import * as globals from "../../globals";
+import styles from "./menubar.css";
 import actions from "../../actions";
 import CellSetButton from "./cellSetButtons";
 
-@connect(state => ({
-  config: state.config,
-  crossfilter: state.crossfilter,
+@connect((state) => ({
   differential: state.differential,
   celllist1: state.differential?.celllist1,
   celllist2: state.differential?.celllist2,
   diffexpMayBeSlow: state.config?.parameters?.["diffexp-may-be-slow"] ?? false,
-  diffexpCellcountMax: state.config?.limits?.diffexp_cellcount_max
+  diffexpCellcountMax: state.config?.limits?.["diffexp_cellcount_max"],
 }))
-class DiffexpButtons extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = {
-      userDismissedPopover: false
-    };
-  }
-
+class DiffexpButtons extends React.PureComponent {
   computeDiffExp = () => {
     const { dispatch, differential } = this.props;
     if (differential.celllist1 && differential.celllist2) {
@@ -46,23 +30,16 @@ class DiffexpButtons extends React.Component {
     const { dispatch, differential } = this.props;
     dispatch({
       type: "clear differential expression",
-      diffExp: differential.diffExp
+      diffExp: differential.diffExp,
     });
     dispatch({
-      type: "clear scatterplot"
-    });
-  };
-
-  handlePopoverDismiss = () => {
-    this.setState({
-      userDismissedPopover: true
+      type: "clear scatterplot",
     });
   };
 
   render() {
     /* diffexp-related buttons may be disabled */
     const { differential, diffexpMayBeSlow, diffexpCellcountMax } = this.props;
-    const { userDismissedPopover } = this.state;
 
     const haveBothCellSets =
       !!differential.celllist1 && !!differential.celllist2;
@@ -85,71 +62,26 @@ class DiffexpButtons extends React.Component {
         diffexpCellcountMax;
 
     return (
-      <ButtonGroup style={{ marginRight: 10 }}>
-        <CellSetButton
-          {...this.props} // eslint-disable-line react/jsx-props-no-spreading
-          eitherCellSetOneOrTwo={1}
-        />
-        <CellSetButton
-          {...this.props} // eslint-disable-line react/jsx-props-no-spreading
-          eitherCellSetOneOrTwo={2}
-        />
+      <ButtonGroup className={styles.menubarButton}>
+        <CellSetButton eitherCellSetOneOrTwo={1} />
+        <CellSetButton eitherCellSetOneOrTwo={2} />
         {!differential.diffExp ? (
-          <Popover
-            isOpen={/* warnMaxSizeExceeded && !userDismissedPopover */ false}
-            position={Position.BOTTOM}
-            target={
-              <Tooltip
-                content={warnMaxSizeExceeded ? tipMessageWarn : tipMessage}
-                position="bottom"
-                hoverOpenDelay={globals.tooltipHoverOpenDelayQuick}
-                intent={warnMaxSizeExceeded ? "danger" : "none"}
-              >
-                <AnchorButton
-                  disabled={!haveBothCellSets || warnMaxSizeExceeded}
-                  intent={warnMaxSizeExceeded ? "danger" : "primary"}
-                  data-testid="diffexp-button"
-                  loading={differential.loading}
-                  icon="left-join"
-                  fill
-                  onClick={this.computeDiffExp}
-                />
-              </Tooltip>
-            }
-            content={
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "flex-start",
-                  alignItems: "flex-end",
-                  flexDirection: "column",
-                  padding: 10,
-                  maxWidth: 310
-                }}
-              >
-                <p>
-                  {`The total number of cells for differential expression computation
-                may not exceed ${diffexpCellcountMax}`}
-                </p>
-                <Button
-                  type="button"
-                  data-testid="diffexp-maxsize-exceeded-warning-dismiss"
-                  intent="warning"
-                  onClick={this.clearDifferentialExpression}
-                >
-                  Dismiss and clear cell sets
-                </Button>
-                <Button
-                  type="button"
-                  data-testid="diffexp-popover-dismiss"
-                  intent="none"
-                  onClick={this.handlePopoverDismiss}
-                >
-                  Dismiss
-                </Button>
-              </div>
-            }
-          />
+          <Tooltip
+            content={warnMaxSizeExceeded ? tipMessageWarn : tipMessage}
+            position="bottom"
+            hoverOpenDelay={globals.tooltipHoverOpenDelayQuick}
+            intent={warnMaxSizeExceeded ? "danger" : "none"}
+          >
+            <AnchorButton
+              disabled={!haveBothCellSets || warnMaxSizeExceeded}
+              intent={warnMaxSizeExceeded ? "danger" : "primary"}
+              data-testid="diffexp-button"
+              loading={differential.loading}
+              icon="left-join"
+              fill
+              onClick={this.computeDiffExp}
+            />
+          </Tooltip>
         ) : null}
 
         {differential.diffExp ? (

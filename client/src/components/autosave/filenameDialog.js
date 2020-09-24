@@ -7,24 +7,21 @@ import {
   InputGroup,
   Dialog,
   Classes,
-  Colors
+  Colors,
 } from "@blueprintjs/core";
 
-@connect(state => ({
-  universe: state.universe,
+@connect((state) => ({
   idhash: state.config?.parameters?.["annotations-user-data-idhash"] ?? null,
   annotations: state.annotations,
-  obsAnnotations: state.universe.obsAnnotations,
-  saveInProgress: state.autosave?.saveInProgress ?? false,
-  lastSavedObsAnnotations: state.autosave?.lastSavedObsAnnotations,
-  error: state.autosave?.error,
-  writableCategoriesEnabled: state.config?.parameters?.["annotations"] ?? false
+  auth: state.config?.authentication,
+  userinfo: state.userinfo,
+  writableCategoriesEnabled: state.config?.parameters?.annotations ?? false,
 }))
 class FilenameDialog extends React.Component {
   constructor(props) {
     super(props);
     this.state = {
-      filenameText: ""
+      filenameText: "",
     };
   }
 
@@ -36,7 +33,7 @@ class FilenameDialog extends React.Component {
 
     dispatch({
       type: "set annotations collection name",
-      data: filenameText
+      data: filenameText,
     });
   };
 
@@ -71,7 +68,7 @@ class FilenameDialog extends React.Component {
             fontStyle: "italic",
             fontSize: 12,
             marginTop: 5,
-            color: Colors.ORANGE3
+            color: Colors.ORANGE3,
           }}
         >
           Name cannot be blank
@@ -84,7 +81,7 @@ class FilenameDialog extends React.Component {
             fontStyle: "italic",
             fontSize: 12,
             marginTop: 5,
-            color: Colors.ORANGE3
+            color: Colors.ORANGE3,
           }}
         >
           Only alphanumeric and underscore allowed
@@ -95,12 +92,19 @@ class FilenameDialog extends React.Component {
   };
 
   render() {
-    const { writableCategoriesEnabled, annotations, idhash } = this.props;
+    const {
+      writableCategoriesEnabled,
+      annotations,
+      idhash,
+      userinfo,
+    } = this.props;
     const { filenameText } = this.state;
 
     return writableCategoriesEnabled &&
+      annotations.promptForFilename &&
       !annotations.dataCollectionNameIsReadOnly &&
-      !annotations.dataCollectionName ? (
+      !annotations.dataCollectionName &&
+      userinfo.is_authenticated ? (
       <Dialog
         icon="tag"
         title="Annotations Collection"
@@ -108,20 +112,23 @@ class FilenameDialog extends React.Component {
         onClose={this.dismissFilenameDialog}
       >
         <form
-          onSubmit={e => {
+          onSubmit={(e) => {
             e.preventDefault();
             this.handleCreateFilename();
           }}
         >
-          <div className={Classes.DIALOG_BODY}>
+          <div className={Classes.DIALOG_BODY} data-testid="annotation-dialog">
             <div style={{ marginBottom: 20 }}>
               <p>Name your annotations collection:</p>
               <InputGroup
                 autoFocus
                 value={filenameText}
                 intent={this.filenameError(filenameText) ? "warning" : "none"}
-                onChange={e => this.setState({ filenameText: e.target.value })}
+                onChange={(e) =>
+                  this.setState({ filenameText: e.target.value })
+                }
                 leftIcon="tag"
+                data-testid="new-annotation-name"
               />
               <p
                 style={{
@@ -129,7 +136,7 @@ class FilenameDialog extends React.Component {
                   visibility: this.filenameError(filenameText)
                     ? "visible"
                     : "hidden",
-                  color: Colors.ORANGE3
+                  color: Colors.ORANGE3,
                 }}
               >
                 {this.filenameErrorMessage(filenameText)}
@@ -157,6 +164,7 @@ class FilenameDialog extends React.Component {
                 onClick={this.handleCreateFilename}
                 intent="primary"
                 type="submit"
+                data-testid="submit-annotation"
               >
                 Create annotations collection
               </Button>

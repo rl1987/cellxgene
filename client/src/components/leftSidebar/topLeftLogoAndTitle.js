@@ -1,43 +1,35 @@
 // jshint esversion: 6
 import React from "react";
 import { connect } from "react-redux";
+import { Button } from "@blueprintjs/core";
+
 import * as globals from "../../globals";
 import Logo from "../framework/logo";
+import Truncate from "../util/truncate";
+import InfoDrawer from "../infoDrawer/infoDrawer";
 
-@connect(state => ({
-  responsive: state.responsive,
+const DATASET_TITLE_FONT_SIZE = 14;
+
+@connect((state) => ({
   datasetTitle: state.config?.displayNames?.dataset ?? "",
-  aboutURL: state.config?.links?.["about-dataset"],
-  scatterplotXXaccessor: state.controls.scatterplotXXaccessor,
-  scatterplotYYaccessor: state.controls.scatterplotYYaccessor
 }))
 class LeftSideBar extends React.Component {
+  handleClick = () => {
+    const { dispatch } = this.props;
+    dispatch({ type: "toggle dataset drawer" });
+  };
+
   render() {
-    const { datasetTitle, aboutURL } = this.props;
-
-    const paddingToAvoidScrollBar = 15;
-
-    const displayTitle =
-      datasetTitle.length > globals.datasetTitleMaxCharacterCount
-        ? `${datasetTitle.substring(
-            0,
-            Math.floor(globals.datasetTitleMaxCharacterCount / 2)
-          )}…${datasetTitle.slice(
-            -Math.floor(globals.datasetTitleMaxCharacterCount / 2)
-          )}`
-        : datasetTitle;
+    const { datasetTitle } = this.props;
 
     return (
       <div
         style={{
           paddingLeft: 8,
           paddingTop: 8,
-          width: globals.leftSidebarWidth - paddingToAvoidScrollBar,
-          position: "absolute",
-          backgroundColor: "white",
-          zIndex: 8888
-          /* x y blur spread color */
-          // boxShadow: "-5px -1px 4px 2px rgba(225,225,225,0.4)"
+          width: globals.leftSidebarWidth,
+          zIndex: 1,
+          borderBottom: `1px solid ${globals.lighterGrey}`,
         }}
       >
         <Logo size={30} />
@@ -49,7 +41,7 @@ class LeftSideBar extends React.Component {
             fontWeight: "bold",
             marginLeft: 5,
             color: globals.logoColor,
-            userSelect: "none"
+            userSelect: "none",
           }}
         >
           cell
@@ -58,30 +50,29 @@ class LeftSideBar extends React.Component {
               position: "relative",
               top: 1,
               fontWeight: 300,
-              fontSize: 24
+              fontSize: 24,
             }}
           >
             ×
           </span>
           gene
         </span>
-        <div
-          data-testid="header"
+        <Button
+          minimal
           style={{
-            fontSize: 14,
-            position: "relative",
-            top: -6,
-            display: "inline-block",
-            width: "190px",
-            marginLeft: "7px",
-            height: "1.2em",
-            overflow: "hidden",
-            wordBreak: "break-all"
+            fontSize: DATASET_TITLE_FONT_SIZE,
+            position: "absolute",
+            right: 10,
           }}
-          title={datasetTitle}
+          onClick={this.handleClick}
         >
-          {aboutURL ? <a href={aboutURL} target="_blank">{displayTitle}</a> : displayTitle}
-        </div>
+          <Truncate>
+            <span style={{ maxWidth: 155 }} data-testid="header">
+              {datasetTitle}
+            </span>
+          </Truncate>
+        </Button>
+        <InfoDrawer />
       </div>
     );
   }

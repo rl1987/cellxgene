@@ -1,24 +1,21 @@
 import React from "react";
 import { connect } from "react-redux";
-import * as globals from "../../globals";
 import actions from "../../actions";
 import FilenameDialog from "./filenameDialog";
 
-@connect(state => ({
-  universe: state.universe,
+@connect((state) => ({
   annotations: state.annotations,
-  obsAnnotations: state.universe.obsAnnotations,
   saveInProgress: state.autosave?.saveInProgress ?? false,
-  lastSavedObsAnnotations: state.autosave?.lastSavedObsAnnotations,
   error: state.autosave?.error,
-  writableCategoriesEnabled: state.config?.parameters?.["annotations"] ?? false,
-  initialDataLoadComplete: state.autosave?.initialDataLoadComplete
+  writableCategoriesEnabled: state.config?.parameters?.annotations ?? false,
+  annoMatrix: state.annoMatrix,
+  lastSavedAnnoMatrix: state.autosave?.lastSavedAnnoMatrix,
 }))
 class Autosave extends React.Component {
   constructor(props) {
     super(props);
     this.state = {
-      timer: null
+      timer: null,
     };
   }
 
@@ -43,16 +40,14 @@ class Autosave extends React.Component {
   tick = () => {
     const { dispatch, saveInProgress } = this.props;
     if (this.needToSave() && !saveInProgress) {
-      dispatch(actions.saveObsAnnotations());
+      dispatch(actions.saveObsAnnotationsAction());
     }
   };
 
   needToSave = () => {
     /* return true if we need to save, false if we don't */
-    const { obsAnnotations, lastSavedObsAnnotations } = this.props;
-    return (
-      lastSavedObsAnnotations && obsAnnotations !== lastSavedObsAnnotations
-    );
+    const { annoMatrix, lastSavedAnnoMatrix } = this.props;
+    return actions.needToSaveObsAnnotations(annoMatrix, lastSavedAnnoMatrix);
   };
 
   statusMessage() {
@@ -64,28 +59,37 @@ class Autosave extends React.Component {
   }
 
   render() {
-    const { writableCategoriesEnabled, saveInProgress, initialDataLoadComplete } = this.props;
-    return writableCategoriesEnabled ? (
+    const {
+      writableCategoriesEnabled,
+      saveInProgress,
+      lastSavedAnnoMatrix,
+    } = this.props;
+    const initialDataLoadComplete = lastSavedAnnoMatrix;
+
+    if (!writableCategoriesEnabled) return null;
+
+    return (
       <div
         id="autosave"
         data-testclass={
           !initialDataLoadComplete
             ? "autosave-init"
-            : (this.needToSave() || saveInProgress)
-              ? "autosave-incomplete"
-              : "autosave-complete"
+            : this.needToSave() || saveInProgress
+            ? "autosave-incomplete"
+            : "autosave-complete"
         }
         style={{
-          position: "fixed",
+          position: "absolute",
           display: "inherit",
-          right: globals.leftSidebarWidth + 5,
-          bottom: 5
+          right: 8,
+          bottom: 8,
+          zIndex: 1,
         }}
       >
         {this.statusMessage()}
         <FilenameDialog />
       </div>
-    ) : null;
+    );
   }
 }
 

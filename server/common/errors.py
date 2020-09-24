@@ -1,86 +1,57 @@
-class FilterError(Exception):
-    """
-    Raised when filter is malformed
-    """
-
-    pass
+from http import HTTPStatus
 
 
-class JSONEncodingValueError(Exception):
-    """
-    Raised when data cannot be encoded into json
-    """
+class CellxgeneException(Exception):
+    """Base class for cellxgene exceptions"""
 
-    pass
-
-
-class MimeTypeError(Exception):
-    """
-    Raised when incompatible MIME type selected
-    """
-
-    pass
+    def __init__(self, message):
+        self.message = message
+        super().__init__(message)
 
 
-class PrepareError(Exception):
-    """
-    Raised when data is misprepared
-    """
+class RequestException(CellxgeneException):
+    """Baseclass for exceptions that can be raised from a request."""
 
-    pass
+    # The default status code is 400 (Bad Request)
+    default_status_code = HTTPStatus.BAD_REQUEST
 
-
-class DatasetAccessError(Exception):
-    """
-    Raised when file loaded into a DataAdaptor is misformatted
-    """
-
-    pass
+    def __init__(self, message, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code or self.default_status_code
 
 
-class DisabledFeatureError(Exception):
-    """
-    Raised when an attempt to use a disabled feature occurs
-    """
-
-    pass
+def define_exception(name, doc):
+    globals()[name] = type(name, (CellxgeneException,), dict(__doc__=doc))
 
 
-class AnnotationsError(Exception):
-    """
-    Raised when an attempt to use the annotations feature fails
-    """
-
-    pass
+def define_request_exception(name, doc, default_status_code=HTTPStatus.BAD_REQUEST):
+    globals()[name] = type(name, (RequestException,), dict(__doc__=doc, default_status_code=default_status_code))
 
 
-class OntologyLoadFailure(Exception):
-    """
-    Raised when reading the ontology file fails
-    """
+define_request_exception("FilterError", "Raised when filter is malformed")
+define_request_exception("JSONEncodingValueError", "Raised when data cannot be encoded into json")
+define_request_exception("MimeTypeError", "Raised when incompatible MIME type selected")
+define_request_exception("DatasetAccessError", "Raised when file loaded into a DataAdaptor is misformatted")
+define_request_exception("DisabledFeatureError", "Raised when an attempt to use a disabled feature occurs")
+define_request_exception("AnnotationsError", "Raised when an attempt to use the annotations feature fails")
+define_request_exception(
+    "ComputeError",
+    "Raised when an error occurs during a compute algorithm (such as diffexp)",
+    HTTPStatus.INTERNAL_SERVER_ERROR,
+)
+define_request_exception("ExceedsLimitError", "Raised when an HTTP request exceeds a limit/quota")
+define_request_exception("ColorFormatException", "Raised when color helper functions encounter an unknown color format")
+define_request_exception(
+    "AuthenticationError",
+    "Raised when there is an authentication error",
+    default_status_code=HTTPStatus.UNAUTHORIZED)
 
-    pass
+define_request_exception(
+    "AnnotationCategoryNameError",
+    "Raised when an annotation category name cant be saved",
+    default_status_code=HTTPStatus.UNPROCESSABLE_ENTITY)
 
-
-class ConfigurationError(Exception):
-    """
-    Raised when checking configuration errors
-    """
-
-    pass
-
-
-class ExceedsLimitError(Exception):
-    """
-    Raised when an HTTP request exceeds a limit/quota
-    """
-
-    pass
-
-
-class ComputeError(Exception):
-    """
-    Raised when an error occurs during a compute algorithm (such as diffexp)
-    """
-
-    pass
+define_exception("OntologyLoadFailure", "Raised when reading the ontology file fails")
+define_exception("ConfigurationError", "Raised when checking configuration errors")
+define_exception("PrepareError", "Raised when data is misprepared")
+define_exception("SecretKeyRetrievalError", "Raised when get_secret_key from AWS fails")

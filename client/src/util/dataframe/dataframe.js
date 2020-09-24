@@ -1,21 +1,21 @@
 import { IdentityInt32Index, isLabelIndex } from "./labelIndex";
 // weird cross-dependency that we should clean up someday...
-import { sortArray } from "../typedCrossfilter/sort";
 import {
   isTypedArray,
   isArrayOrTypedArray,
   callOnceLazy,
-  memoize
+  memoize,
+  __getMemoId,
 } from "./util";
 import {
   summarizeContinuous,
-  summarizeCategorical as _summarizeCategorical
+  summarizeCategorical as _summarizeCategorical,
 } from "./summarize";
 import {
   histogramCategorical as _histogramCategorical,
   hashCategorical,
   histogramContinuous,
-  hashContinuous
+  hashContinuous,
 } from "./histogram";
 
 /*
@@ -74,17 +74,6 @@ Dataframe
 
 class Dataframe {
   /**
-  memoization helpers.
-  **/
-  static __DataframeId__ = 0;
-
-  static __getId() {
-    const id = Dataframe.__DataframeId__;
-    Dataframe.__DataframeId__ += 1;
-    return id;
-  }
-
-  /**
   Constructors & factories
   **/
 
@@ -127,7 +116,7 @@ class Dataframe {
     this.length = nRows; // convenience accessor for row dimension
     this.rowIndex = rowIndex;
     this.colIndex = colIndex;
-    this.__id = Dataframe.__getId();
+    this.__id = __getMemoId();
 
     this.__compile(__columnsAccessor);
     Object.freeze(this);
@@ -140,7 +129,7 @@ class Dataframe {
     if (!Array.isArray(columnarData)) {
       throw new TypeError("Dataframe constructor requires array of columns");
     }
-    if (!columnarData.every(c => isArrayOrTypedArray(c))) {
+    if (!columnarData.every((c) => isArrayOrTypedArray(c))) {
       throw new TypeError("Dataframe columns must all be Array or TypedArray");
     }
     if (!isLabelIndex(rowIndex)) {
@@ -153,7 +142,7 @@ class Dataframe {
     /* check for expected dimensionality / size */
     if (
       nCols !== columnarData.length ||
-      !columnarData.every(c => c.length === nRows)
+      !columnarData.every((c) => c.length === nRows)
     ) {
       throw new RangeError(
         "Dataframe dimension does not match provided data shape"
@@ -203,7 +192,7 @@ class Dataframe {
 
     */
     const { length } = column;
-    const __id = Dataframe.__getId();
+    const __id = __getMemoId();
 
     /* get value by row label */
     const get = function get(rlabel) {
@@ -261,7 +250,7 @@ class Dataframe {
     Create histogram bins for this column.  Memoized.
     */
     const _memoHistoCat = memoize(_histogramCategorical, hashCategorical);
-    const histogramCategorical = by => _memoHistoCat(get, by);
+    const histogramCategorical = (by) => _memoHistoCat(get, by);
     let histogram = null;
     if (isTypedArray(column)) {
       const mFn = memoize(histogramContinuous, hashContinuous);
@@ -291,10 +280,8 @@ class Dataframe {
 
     Use an existing accessor if provided, else compile a new one.
     */
-    const {
-      getOffset: getRowByOffset,
-      getLabel: getRowByLabel
-    } = this.rowIndex;
+    const getRowByOffset = this.rowIndex.getOffset.bind(this.rowIndex);
+    const getRowByLabel = this.rowIndex.getLabel.bind(this.rowIndex);
     this.__columnsAccessor = this.__columns.map((column, idx) => {
       if (accessors[idx]) {
         return accessors[idx];
@@ -389,7 +376,7 @@ class Dataframe {
     let dstLabels;
     if (!labels) {
       // combine all columns
-      dstLabels = dataframe.colIndex.keys();
+      dstLabels = dataframe.colIndex.labels();
       srcLabels = dstLabels;
     } else if (Array.isArray(labels)) {
       // combine subset of keys with no aliasing
@@ -423,7 +410,7 @@ class Dataframe {
 
     // otherwise, bulid a new dataframe combining columns from both
 
-    const srcOffsets = srcLabels.map(l => dataframe.colIndex.getOffset(l));
+    const srcOffsets = srcLabels.map((l) => dataframe.colIndex.getOffset(l));
 
     // check for label collisions
     if (dstLabels.some(this.hasCol, this)) {
@@ -435,12 +422,12 @@ class Dataframe {
     const { rowIndex } = this;
     const columns = [
       ...this.__columns,
-      ...srcOffsets.map(i => dataframe.__columns[i])
+      ...srcOffsets.map((i) => dataframe.__columns[i]),
     ];
     const colIndex = this.colIndex.withLabels(dstLabels);
     const columnsAccessor = [
       ...this.__columnsAccessor,
-      ...srcOffsets.map(i => dataframe.__columnsAccessor[i])
+      ...srcOffsets.map((i) => dataframe.__columnsAccessor[i]),
     ];
 
     return new this.constructor(
@@ -537,7 +524,12 @@ class Dataframe {
   }
 
   static empty(rowIndex = null, colIndex = null) {
-    return new Dataframe([0, 0], [], rowIndex, colIndex);
+    const dims = [
+      rowIndex ? rowIndex.size() : 0,
+      colIndex ? colIndex.size() : 0,
+    ];
+    if (dims[0] && dims[1]) throw new Error("not an empty dataframe");
+    return new Dataframe(dims, new Array(dims[1]), rowIndex, colIndex);
   }
 
   static create(dims, columnarData) {
@@ -551,97 +543,68 @@ class Dataframe {
     return new Dataframe(dims, columnarData, null, null);
   }
 
-  __subset(rowOffsets, colOffsets, withRowIndex) {
+  __subset(newRowIndex, newColIndex) {
     const dims = [...this.dims];
 
-    const getSortedLabelAndOffsets = (offsets, index) => {
-      /*
-      Given offsets, return both offsets and associated lables,
-      sorted by offset.
-      */
-      if (!offsets) {
-        return [null, null];
+    /* subset columns */
+    let { __columns, colIndex, __columnsAccessor } = this;
+    if (newColIndex) {
+      const colOffsets = this.colIndex.getOffsets(newColIndex.labels());
+      __columns = new Array(colOffsets.length);
+      __columnsAccessor = new Array(colOffsets.length);
+      for (let i = 0, l = colOffsets.length; i < l; i += 1) {
+        __columns[i] = this.__columns[colOffsets[i]];
+        __columnsAccessor[i] = this.__columnsAccessor[colOffsets[i]];
       }
-      const sortedOffsets = sortArray(offsets);
-      const sortedLabels = new Array(sortedOffsets.length);
-      for (let i = 0, l = sortedOffsets.length; i < l; i += 1) {
-        sortedLabels[i] = index.getLabel(sortedOffsets[i]);
-      }
-      return [sortedLabels, sortedOffsets];
-    };
-
-    let { colIndex } = this;
-    if (colOffsets) {
-      let colLabels;
-      [colLabels, colOffsets] = getSortedLabelAndOffsets(
-        colOffsets,
-        this.colIndex
-      );
+      colIndex = newColIndex;
       dims[1] = colOffsets.length;
-      colIndex = this.colIndex.subsetLabels(colLabels);
     }
 
     let { rowIndex } = this;
-    if (withRowIndex) rowIndex = withRowIndex;
-    if (rowOffsets) {
-      let rowLabels;
-      [rowLabels, rowOffsets] = getSortedLabelAndOffsets(
-        rowOffsets,
-        this.rowIndex
-      );
-      dims[0] = rowLabels.length;
-      if (!withRowIndex) rowIndex = this.rowIndex.subsetLabels(rowLabels);
-    }
-
-    /* subset columns */
-    let columns = this.__columns;
-    if (colOffsets) {
-      columns = new Array(colOffsets.length);
-      for (let i = 0, l = colOffsets.length; i < l; i += 1) {
-        columns[i] = this.__columns[colOffsets[i]];
-      }
-    }
-
-    /* subset rows */
-    if (rowOffsets) {
-      columns = columns.map(col => {
+    if (newRowIndex) {
+      const rowOffsets = this.rowIndex.getOffsets(newRowIndex.labels());
+      __columns = __columns.map((col) => {
         const newCol = new col.constructor(rowOffsets.length);
         for (let i = 0, l = rowOffsets.length; i < l; i += 1) {
           newCol[i] = col[rowOffsets[i]];
         }
         return newCol;
       });
+      rowIndex = newRowIndex;
+      dims[0] = rowOffsets.length;
+      __columnsAccessor = []; // force a recompile
     }
 
     if (dims[0] === 0 || dims[1] === 0) return Dataframe.empty();
-    return new Dataframe(dims, columns, rowIndex, colIndex);
+    return new Dataframe(
+      dims,
+      __columns,
+      rowIndex,
+      colIndex,
+      __columnsAccessor
+    );
   }
 
   subset(rowLabels, colLabels = null, withRowIndex = null) {
     /*
     Subset by row/col labels.
 
-    withRowIndex allows assignment of new row index during subset operation.
-    If withRowIndex === null, it will reset the index to identity (offset)
-    indexing.  if withRowIndex is a label index object, it will be used
-    for the new dataframe.
+    withRowIndex allows subset with an index, rather than rowLabels.
+    If withRowIndex is specified, rowLabels is ignored.
     */
-    const toOffsets = (labels, index) => {
-      if (!labels) {
-        return null;
-      }
-      return labels.map(label => {
-        const off = index.getOffset(label);
-        if (off === undefined) {
-          throw new RangeError(`unknown label: ${label}`);
-        }
-        return off;
-      });
-    };
+    let rowIndex = null;
+    if (withRowIndex) {
+      rowIndex = withRowIndex;
+    } else if (rowLabels) {
+      rowIndex = this.rowIndex.subset(rowLabels);
+    }
 
-    const rowOffsets = toOffsets(rowLabels, this.rowIndex);
-    const colOffsets = toOffsets(colLabels, this.colIndex);
-    return this.__subset(rowOffsets, colOffsets, withRowIndex);
+    let colIndex = null;
+    if (colLabels) {
+      colIndex = this.colIndex.subset(colLabels);
+    }
+
+    return this.__subset(rowIndex, colIndex);
   }
 
   isubset(rowOffsets, colOffsets = null, withRowIndex = null) {
@@ -653,7 +616,19 @@ class Dataframe {
     indexing. If withRowIndex is a label index object, it will be used
     for the new dataframe.
     */
-    return this.__subset(rowOffsets, colOffsets, withRowIndex);
+    let rowIndex = null;
+    if (withRowIndex) {
+      rowIndex = withRowIndex;
+    } else if (rowOffsets) {
+      rowIndex = this.rowIndex.isubset(rowOffsets);
+    }
+
+    let colIndex = null;
+    if (colOffsets) {
+      colIndex = this.colIndex.isubset(colOffsets);
+    }
+
+    return this.__subset(rowIndex, colIndex);
   }
 
   isubsetMask(rowMask, colMask = null, withRowIndex = null) {
@@ -690,7 +665,7 @@ class Dataframe {
     };
     const rowOffsets = toList(rowMask, nRows);
     const colOffsets = toList(colMask, nCols);
-    return this.__subset(rowOffsets, colOffsets, withRowIndex);
+    return this.isubset(rowOffsets, colOffsets, withRowIndex);
   }
 
   /**
@@ -726,7 +701,9 @@ class Dataframe {
     /*
     Return column accessor by offset.
     */
-    return this.__columnsAccessor[columnOffset];
+    return Number.isInteger(columnOffset)
+      ? this.__columnsAccessor[columnOffset]
+      : undefined;
   }
 
   at(r, c) {
@@ -775,7 +752,14 @@ class Dataframe {
     dataframe - returns true/false
     */
     const [nRows, nCols] = this.dims;
-    return c >= 0 && c < nCols && r >= 0 && r < nRows;
+    return (
+      Number.isInteger(r) &&
+      Number.isInteger(c) &&
+      c >= 0 &&
+      c < nCols &&
+      r >= 0 &&
+      r < nRows
+    );
   }
 
   hasCol(c) {
@@ -790,7 +774,7 @@ class Dataframe {
     Return true if this is an empty dataframe, ie, has dimensions [0,0]
     */
     const [rows, cols] = this.dims;
-    return rows === 0 && cols === 0;
+    return rows === 0 || cols === 0;
   }
 
   /****
@@ -807,7 +791,9 @@ class Dataframe {
 
     callback MUST not modify the column, but instead return a mutated copy.
     */
-    const columns = this.__columns.map(callback);
+    const columns = this.__columns.map((colData, colIdx) =>
+      callback(colData, colIdx, this)
+    );
     const columnsAccessor = columns.map((c, idx) =>
       this.__columns[idx] === c ? this.__columnsAccessor[idx] : undefined
     );

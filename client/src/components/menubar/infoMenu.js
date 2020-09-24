@@ -1,24 +1,25 @@
 // jshint esversion: 6
 import React from "react";
 import { Button, Popover, Menu, MenuItem, Position } from "@blueprintjs/core";
+import { IconNames } from "@blueprintjs/icons";
+import styles from "./menubar.css";
 
-function InformationMenu(props) {
-  const { libraryVersions, aboutLink, tosURL, privacyURL } = props;
+const handleClick = (dispatch) => {
+  dispatch({ type: "toggle dataset drawer" });
+};
+
+const InformationMenu = React.memo((props) => {
+  const { libraryVersions, tosURL, privacyURL, dispatch } = props;
   return (
-    <div style={{}} className="bp3-button-group">
+    <div className={`bp3-button-group ${styles.menubarButton}`}>
       <Popover
         content={
           <Menu>
-            {aboutLink ? (
-              <MenuItem
-                href={aboutLink}
-                target="_blank"
-                icon="document-open"
-                text="About this dataset"
-              />
-            ) : (
-              ""
-            )}
+            <MenuItem
+              onClick={() => handleClick(dispatch)}
+              icon={IconNames.INFO_SIGN}
+              text="Dataset Overview"
+            />
 
             <MenuItem
               href="https://chanzuckerberg.github.io/cellxgene/"
@@ -40,23 +41,23 @@ function InformationMenu(props) {
             />
             <MenuItem
               target="_blank"
-              text={`cellxgene v${
+              text={
                 libraryVersions && libraryVersions.cellxgene
                   ? libraryVersions.cellxgene
                   : null
-              }`}
+              }
             />
             <MenuItem text="MIT License" />
-            {tosURL ? <MenuItem
-              href={tosURL}
-              target="_blank"
-              text="Terms of Service"
-            /> : null }
-            {privacyURL ? <MenuItem
-              href={privacyURL}
-              target="_blank"
-              text="Privacy Policy"
-            /> : null }
+            {tosURL ? (
+              <MenuItem href={tosURL} target="_blank" text="Terms of Service" />
+            ) : null}
+            {privacyURL ? (
+              <MenuItem
+                href={privacyURL}
+                target="_blank"
+                text="Privacy Policy"
+              />
+            ) : null}
           </Menu>
         }
         position={Position.BOTTOM_RIGHT}
@@ -65,12 +66,12 @@ function InformationMenu(props) {
           type="button"
           className="bp3-button bp3-icon-info-sign"
           style={{
-            cursor: "pointer"
+            cursor: "pointer",
           }}
         />
       </Popover>
     </div>
   );
-}
+});
 
 export default InformationMenu;

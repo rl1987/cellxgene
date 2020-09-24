@@ -1,34 +1,34 @@
-import os
 import json
 import logging
-from server.common.utils import dtype_to_schema
-from server.common.errors import DatasetAccessError, ConfigurationError
-from server.common.utils import path_join
+import os
+import threading
+
+import numpy as np
+import pandas as pd
+import tiledb
+from server_timing import Timing as ServerTiming
+
+import server.compute.diffexp_cxg as diffexp_cxg
 from server.common.constants import Axis
+from server.common.errors import DatasetAccessError, ConfigurationError
+from server.common.immutable_kvcache import ImmutableKVCache
+from server.common.utils.type_conversion_utils import get_schema_type_hint_from_dtype
+from server.common.utils.utils import path_join
 from server.data_common.data_adaptor import DataAdaptor
 from server.data_common.fbs.matrix import encode_matrix_fbs
 from server.data_cxg.cxg_util import pack_selector_from_mask
-import server.compute.diffexp_cxg as diffexp_cxg
-from server.common.immutable_kvcache import ImmutableKVCache
-import tiledb
-import numpy as np
-import pandas as pd
-from server_timing import Timing as ServerTiming
-import threading
 
 
 class CxgAdaptor(DataAdaptor):
-
     # TODO:  The tiledb context parameters should be a configuration option
     tiledb_ctx = tiledb.Ctx(
         {"sm.tile_cache_size": 8 * 1024 * 1024 * 1024, "sm.num_reader_threads": 32, "vfs.s3.region": "us-east-1"}
     )
 
-    def __init__(self, data_locator, config=None):
-        super().__init__(config)
+    def __init__(self, data_locator, app_config=None, dataset_config=None):
+        super().__init__(data_locator, app_config, dataset_config)
         self.lock = threading.Lock()
 
-        self.data_locator = data_locator
         self.url = data_locator.uri_or_path
         if self.url[-1] != "/":
             self.url += "/"
@@ -51,8 +51,14 @@ class CxgAdaptor(DataAdaptor):
         """Set the tiledb context.  This should be set before any instances of CxgAdaptor are created"""
         try:
             CxgAdaptor.tiledb_ctx = tiledb.Ctx(context_params)
+            tiledb.default_ctx(context_params)
+
         except tiledb.libtiledb.TileDBError as e:
-            raise ConfigurationError(f"Invalid tiledb context: {str(e)}")
+            if e.message == "Global context already initialized!":
+                if tiledb.default_ctx().config().dict() != CxgAdaptor.tiledb_ctx.config().dict():
+                    raise ConfigurationError("Cannot change tiledb configuration once it is set")
+            else:
+                raise ConfigurationError(f"Invalid tiledb context: {str(e)}")
 
     @staticmethod
     def pre_load_validation(data_locator):
@@ -66,8 +72,8 @@ class CxgAdaptor(DataAdaptor):
         return 0
 
     @staticmethod
-    def open(data_locator, args):
-        return CxgAdaptor(data_locator, args)
+    def open(data_locator, app_config, dataset_config=None):
+        return CxgAdaptor(data_locator, app_config, dataset_config)
 
     def get_about(self):
         return self.about if self.about else super().get_about()
@@ -75,11 +81,8 @@ class CxgAdaptor(DataAdaptor):
     def get_title(self):
         return self.title if self.title else super().get_title()
 
-    def get_location(self):
-        return self.url
-
-    def get_data_locator(self):
-        return self.data_locator
+    def get_corpora_props(self):
+        return self.corpora_props if self.corpora_props else super().get_corpora_props()
 
     def get_name(self):
         return "cellxgene cxg adaptor version"
@@ -133,6 +136,10 @@ class CxgAdaptor(DataAdaptor):
             return False
         return True
 
+    def has_array(self, name):
+        a_type = tiledb.object_type(path_join(self.url, name), ctx=self.tiledb_ctx)
+        return a_type == "array"
+
     def _validate_and_initialize(self):
         """
         remember, preload_validation() has already been called, so
@@ -147,31 +154,39 @@ class CxgAdaptor(DataAdaptor):
         * version 0.1 -- metadata attache to cxg_group_metadata array.
           Same as 0, except it adds group metadata.
         """
-        a_type = tiledb.object_type(path_join(self.url, "cxg_group_metadata"), ctx=self.tiledb_ctx)
-        if a_type is None:
-            # version 0
-            cxg_version = "0.0"
-            title = None
-            about = None
-        elif a_type == "array":
+        title = None
+        about = None
+        corpora_props = None
+        if self.has_array("cxg_group_metadata"):
             # version >0
             gmd = self.open_array("cxg_group_metadata")
             cxg_version = gmd.meta["cxg_version"]
-            if cxg_version == "0.1":
+            # version 0.1 used a malformed/shorthand semver string.
+            if cxg_version == "0.1" or cxg_version == "0.2.0":
                 cxg_properties = json.loads(gmd.meta["cxg_properties"])
                 title = cxg_properties.get("title", None)
                 about = cxg_properties.get("about", None)
+            if cxg_version == "0.2.0":
+                corpora_props = json.loads(gmd.meta["corpora"]) if "corpora" in gmd.meta else None
+        else:
+            # version 0
+            cxg_version = "0.0"
 
-        if cxg_version not in ["0.0", "0.1"]:
+        if cxg_version not in ["0.0", "0.1", "0.2.0"]:
             raise DatasetAccessError(f"cxg matrix is not valid: {self.url}")
 
         self.title = title
         self.about = about
         self.cxg_version = cxg_version
+        self.corpora_props = corpora_props
 
     @staticmethod
     def _open_array(uri, tiledb_ctx):
-        return tiledb.DenseArray(uri, mode="r", ctx=tiledb_ctx)
+        with tiledb.Array(uri, mode="r", ctx=tiledb_ctx) as array:
+            if array.schema.sparse:
+                return tiledb.SparseArray(uri, mode="r", ctx=tiledb_ctx)
+            else:
+                return tiledb.DenseArray(uri, mode="r", ctx=tiledb_ctx)
 
     def open_array(self, name):
         try:
@@ -189,20 +204,84 @@ class CxgAdaptor(DataAdaptor):
 
     def compute_diffexp_ttest(self, maskA, maskB, top_n=None, lfc_cutoff=None):
         if top_n is None:
-            top_n = self.config.diffexp__top_n
+            top_n = self.dataset_config.diffexp__top_n
         if lfc_cutoff is None:
-            lfc_cutoff = self.config.diffexp__lfc_cutoff
+            lfc_cutoff = self.dataset_config.diffexp__lfc_cutoff
         return diffexp_cxg.diffexp_ttest(self, maskA, maskB, top_n, lfc_cutoff)
+
+    def get_colors(self):
+        if self.cxg_version == "0.0":
+            return dict()
+        meta = self.open_array("cxg_group_metadata").meta
+        return json.loads(meta["cxg_category_colors"]) if "cxg_category_colors" in meta else dict()
+
+    def __remap_indices(self, coord_range, coord_mask, coord_data):
+        """
+        This function maps the indices in coord_data, which could be in the range [0,coord_range), to
+        a range that only includes the number of indices encoded in coord_mask.
+        coord_range is the maxinum size of the range (e.g. get_shape()[0] or get_shape()[1])
+        coord_mask is a mask passed into the get_X_array, of size coord_range
+        coord_data are indices representing locations of non-zero values, in the range [0,coord_range).
+
+        For example, say
+        coord_mask = [1,0,1,0,0,1]
+        coord_data = [2,0,2,2,5]
+
+        The function computes the following:
+        indices = [0,2,5]
+        ncoord = 3
+        maprange = [0,1,2]
+        mapindex = [0,0,1,0,0,2]
+        coordindices = [1,0,1,1,2]
+        """
+        if coord_mask is None:
+            return coord_range, coord_data
+
+        indices = np.where(coord_mask)[0]
+        ncoord = indices.shape[0]
+        maprange = np.arange(ncoord)
+        mapindex = np.zeros(indices[-1] + 1, dtype=int)
+        mapindex[indices] = maprange
+        coordindices = mapindex[coord_data]
+        return ncoord, coordindices
 
     def get_X_array(self, obs_mask=None, var_mask=None):
         obs_items = pack_selector_from_mask(obs_mask)
         var_items = pack_selector_from_mask(var_mask)
+        if obs_items is None or var_items is None:
+            # If either zero rows or zero columns were selected, return an empty 2d array.
+            shape = self.get_shape()
+            obs_size = 0 if obs_items is None else shape[0] if obs_mask is None else np.count_nonzero(obs_mask)
+            var_size = 0 if var_items is None else shape[1] if var_mask is None else np.count_nonzero(var_mask)
+            return np.ndarray((obs_size, var_size))
+
         X = self.open_array("X")
-        if obs_items == slice(None) and var_items == slice(None):
-            data = X[:, :]
+
+        if X.schema.sparse:
+            if obs_items == slice(None) and var_items == slice(None):
+                data = X[:, :]
+            else:
+                data = X.multi_index[obs_items, var_items]
+
+            nrows, obsindices = self.__remap_indices(X.shape[0], obs_mask, data.get("coords", data)["obs"])
+            ncols, varindices = self.__remap_indices(X.shape[1], var_mask, data.get("coords", data)["var"])
+            densedata = np.zeros((nrows, ncols), dtype=self.get_X_array_dtype())
+            densedata[obsindices, varindices] = data[""]
+            if self.has_array("X_col_shift"):
+                X_col_shift = self.open_array("X_col_shift")
+                if var_items == slice(None):
+                    densedata += X_col_shift[:]
+                else:
+                    densedata += X_col_shift.multi_index[var_items][""]
+
+            return densedata
+
         else:
-            data = X.multi_index[obs_items, var_items][""]
-        return data
+            if obs_items == slice(None) and var_items == slice(None):
+                data = X[:, :]
+            else:
+                data = X.multi_index[obs_items, var_items][""]
+            return data
 
     def get_shape(self):
         X = self.open_array("X")
@@ -258,38 +337,12 @@ class CxgAdaptor(DataAdaptor):
     # function to get the embedding
     # this function to iterate through embeddings.
     def get_embedding_names(self):
-        with ServerTiming.time(f"layout.lsuri"):
+        with ServerTiming.time("layout.lsuri"):
             pemb = self.get_path("emb")
             embeddings = [os.path.basename(p) for (p, t) in self.lsuri(pemb) if t == "array"]
         if len(embeddings) == 0:
             raise DatasetAccessError("cxg matrix missing embeddings")
         return embeddings
-
-    @staticmethod
-    def _get_col_type(attr, schema_hints={}):
-        type_hint = schema_hints.get(attr.name, {})
-        dtype = attr.dtype
-        schema = {}
-        # type hints take precedence
-        if "type" in type_hint:
-            schema["type"] = type_hint["type"]
-        elif dtype == np.float32:
-            schema["type"] = "float32"
-        elif dtype == np.int32:
-            schema["type"] = "int32"
-        elif dtype == np.bool_:
-            schema["type"] = "boolean"
-        elif dtype == np.str:
-            schema["type"] = "string"
-        elif dtype == "category":
-            schema["type"] = "categorical"
-            schema["categories"] = dtype.categories.tolist()
-        else:
-            raise TypeError(f"Annotations of type {dtype} are unsupported.")
-
-        if schema["type"] == "categorical" and "categories" in schema_hints:
-            schema["categories"] = schema_hints["categories"]
-        return schema
 
     def _get_schema(self):
         if self.schema:
@@ -305,7 +358,7 @@ class CxgAdaptor(DataAdaptor):
             A = self.open_array(ax)
             schema_hints = json.loads(A.meta["cxg_schema"]) if "cxg_schema" in A.meta else {}
             if type(schema_hints) is not dict:
-                raise TypeError(f"Array schema was malformed.")
+                raise TypeError("Array schema was malformed.")
 
             cols = []
             for attr in A.schema:
@@ -317,7 +370,7 @@ class CxgAdaptor(DataAdaptor):
                     if schema["type"] == "categorical" and "categories" in type_hint:
                         schema["categories"] = type_hint["categories"]
                 else:
-                    schema.update(dtype_to_schema(attr.dtype))
+                    schema.update(get_schema_type_hint_from_dtype(attr.dtype))
                 cols.append(schema)
 
             annotations[ax] = dict(columns=cols)
@@ -329,7 +382,7 @@ class CxgAdaptor(DataAdaptor):
         embeddings = self.get_embedding_names()
         for ename in embeddings:
             A = self.open_array(f"emb/{ename}")
-            obs_layout.append({"name": ename, "type": A.dtype.name, "dims": [f"{ename}_{d}" for d in range(0, A.ndim)]})
+            obs_layout.append({"name": ename, "type": "float32", "dims": [f"{ename}_{d}" for d in range(0, A.ndim)]})
 
         schema = {"dataframe": dataframe, "annotations": annotations, "layout": {"obs": obs_layout}}
         return schema

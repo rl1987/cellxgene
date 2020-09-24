@@ -4,27 +4,24 @@ import Helmet from "react-helmet";
 import { connect } from "react-redux";
 
 import Container from "./framework/container";
+import Layout from "./framework/layout";
 import LeftSideBar from "./leftSidebar";
 import RightSideBar from "./rightSidebar";
 import Legend from "./continuousLegend";
 import Graph from "./graph/graph";
 import MenuBar from "./menubar";
 import Autosave from "./autosave";
+import Embedding from "./embedding";
 import TermsOfServicePrompt from "./termsPrompt";
 
 import actions from "../actions";
 
-@connect(state => ({
+@connect((state) => ({
   loading: state.controls.loading,
   error: state.controls.error,
-  graphRenderCounter: state.controls.graphRenderCounter
+  graphRenderCounter: state.controls.graphRenderCounter,
 }))
 class App extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = {};
-  }
-
   componentDidMount() {
     const { dispatch } = this.props;
 
@@ -33,24 +30,7 @@ class App extends React.Component {
     this._onURLChanged();
 
     dispatch(actions.doInitialDataLoad(window.location.search));
-
-    /* listen for resize events */
-    window.addEventListener("resize", () => {
-      dispatch({
-        type: "window resize",
-        data: {
-          height: window.innerHeight,
-          width: window.innerWidth
-        }
-      });
-    });
-    dispatch({
-      type: "window resize",
-      data: {
-        height: window.innerHeight,
-        width: window.innerWidth
-      }
-    });
+    this.forceUpdate();
   }
 
   _onURLChanged() {
@@ -70,7 +50,7 @@ class App extends React.Component {
               position: "fixed",
               fontWeight: 500,
               top: window.innerHeight / 2,
-              left: window.innerWidth / 2 - 50
+              left: window.innerWidth / 2 - 50,
             }}
           >
             loading cellxgene
@@ -82,21 +62,28 @@ class App extends React.Component {
               position: "fixed",
               fontWeight: 500,
               top: window.innerHeight / 2,
-              left: window.innerWidth / 2 - 50
+              left: window.innerWidth / 2 - 50,
             }}
           >
-            error loading
+            error loading cellxgene
           </div>
         ) : null}
-        <div>
-          {loading ? null : <LeftSideBar />}
-          {loading ? null : <RightSideBar />}
-          {loading ? null : <MenuBar />}
-          {loading ? null : <Graph key={graphRenderCounter} />}
-          {loading ? null : <Autosave />}
-          {loading ? null : <TermsOfServicePrompt />}
-          <Legend />
-        </div>
+        {loading || error ? null : (
+          <Layout>
+            <LeftSideBar />
+            {(viewportRef) => (
+              <>
+                <MenuBar />
+                <Embedding />
+                <Autosave />
+                <TermsOfServicePrompt />
+                <Legend viewportRef={viewportRef} />
+                <Graph key={graphRenderCounter} viewportRef={viewportRef} />
+              </>
+            )}
+            <RightSideBar />
+          </Layout>
+        )}
       </Container>
     );
   }

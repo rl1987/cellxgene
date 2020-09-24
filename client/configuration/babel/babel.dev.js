@@ -2,8 +2,15 @@ module.exports = {
   babelrc: false,
   cacheDirectory: true,
   presets: [
-    ["modern-browsers", { loose: true, modules: false }],
-    "@babel/preset-react"
+    [
+      "@babel/preset-env",
+      {
+        useBuiltIns: "entry",
+        corejs: 3,
+        modules: false,
+      },
+    ],
+    "@babel/preset-react",
   ],
   plugins: [
     "@babel/plugin-proposal-function-bind",
@@ -11,6 +18,6 @@ module.exports = {
     ["@babel/plugin-proposal-class-properties", { loose: true }],
     "@babel/plugin-proposal-export-namespace-from",
     "@babel/plugin-proposal-optional-chaining",
-    "@babel/plugin-proposal-nullish-coalescing-operator"
-  ]
+    "@babel/plugin-proposal-nullish-coalescing-operator",
+  ],
 };

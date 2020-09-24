@@ -1,10 +1,10 @@
 import { API } from "../globals";
-import { Universe } from "../util/stateManager";
 import {
   postNetworkErrorToast,
   postAsyncSuccessToast,
-  postAsyncFailureToast
+  postAsyncFailureToast,
 } from "../components/framework/toasters";
+import { _switchEmbedding } from "./embedding";
 
 function abortableFetch(request, opts, timeout = 0) {
   const controller = new AbortController();
@@ -18,13 +18,13 @@ function abortableFetch(request, opts, timeout = 0) {
         setTimeout(() => controller.abort(), timeout);
       }
       return fetch(request, { ...opts, signal });
-    }
+    },
   };
 }
 
 async function doReembedFetch(dispatch, getState) {
   const state = getState();
-  let cells = state.world.obsAnnotations.rowIndex.keys();
+  let cells = state.annoMatrix.rowIndex.labels();
 
   // These lines ensure that we convert any TypedArray to an Array.
   // This is necessary because JSON.stringify() does some very strange
@@ -38,26 +38,23 @@ async function doReembedFetch(dispatch, getState) {
       method: "PUT",
       headers: new Headers({
         Accept: "application/octet-stream",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
       }),
       body: JSON.stringify({
         method: "umap",
-        filter: { obs: { index: cells } }
+        filter: { obs: { index: cells } },
       }),
-      credentials: "include"
+      credentials: "include",
     },
     60000 // 1 minute timeout
   );
   dispatch({
     type: "reembed: request start",
-    abortableFetch: af
+    abortableFetch: af,
   });
   const res = await af.ready();
 
-  if (
-    res.ok &&
-    res.headers.get("Content-Type").includes("application/octet-stream")
-  ) {
+  if (res.ok && res.headers.get("Content-Type").includes("application/json")) {
     return res;
   }
 
@@ -67,7 +64,6 @@ async function doReembedFetch(dispatch, getState) {
   if (body && body.length > 0) {
     msg = `${msg} -- ${body}`;
   }
-  postNetworkErrorToast(msg);
   throw new Error(msg);
 }
 
@@ -78,21 +74,28 @@ export function requestReembed() {
   return async (dispatch, getState) => {
     try {
       const res = await doReembedFetch(dispatch, getState);
-      const schema = JSON.parse(res.headers.get("CxG-Schema"));
-      const buffer = await res.arrayBuffer();
-      const df = Universe.matrixFBSToDataframe(buffer);
+      const schema = await res.json();
       dispatch({
-        type: "reembed: request completed"
+        type: "reembed: request completed",
       });
+
+      const { annoMatrix: prevAnnoMatrix } = getState();
+      const base = prevAnnoMatrix.base().addEmbedding(schema);
+      const [annoMatrix, obsCrossfilter] = await _switchEmbedding(
+        base,
+        schema.name
+      );
       dispatch({
         type: "reembed: add reembedding",
-        embedding: df,
-        schema
+        schema,
+        annoMatrix,
+        obsCrossfilter,
       });
+
       postAsyncSuccessToast("Re-embedding has completed.");
     } catch (error) {
       dispatch({
-        type: "reembed: request aborted"
+        type: "reembed: request aborted",
       });
       if (error.name === "AbortError") {
         postAsyncFailureToast("Re-embedding calculation was aborted.");
@@ -102,12 +105,4 @@ export function requestReembed() {
       console.log("Reembed exception:", error, error.name, error.message);
     }
   };
-}
-
-export function reembedResetWorldToUniverse(dispatch, getState) {
-  const { reembedController } = getState();
-  if (reembedController.pendingFetch) reembedController.pendingFetch.abort();
-  dispatch({
-    type: "reembed: clear all reembeddings"
-  });
 }

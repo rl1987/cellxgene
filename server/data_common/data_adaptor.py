@@ -1,28 +1,39 @@
 from abc import ABCMeta, abstractmethod
-from server_timing import Timing as ServerTiming
-import numpy as np
-import pandas as pd
 from os.path import basename, splitext
 
-from server.data_common.fbs.matrix import encode_matrix_fbs
+import numpy as np
+import pandas as pd
+from server_timing import Timing as ServerTiming
+
+from server.common.app_config import AppFeature, AppConfig
 from server.common.constants import Axis
 from server.common.errors import FilterError, JSONEncodingValueError, ExceedsLimitError
-from server.common.utils import jsonify_numpy
-from server.common.app_config import AppFeature, AppConfig
+from server.common.utils.utils import jsonify_numpy
+from server.data_common.fbs.matrix import encode_matrix_fbs
 
 
 class DataAdaptor(metaclass=ABCMeta):
     """Base class for loading and accessing matrix data"""
 
-    def __init__(self, config):
-        if type(config) != AppConfig:
+    def __init__(self, data_locator, app_config, dataset_config=None):
+        if type(app_config) != AppConfig:
             raise TypeError("config expected to be of type AppConfig")
 
+        # location to the dataset
+        self.data_locator = data_locator
+
         # config is the application configuration
-        self.config = config
+        self.app_config = app_config
+        self.server_config = self.app_config.server_config
+        self.dataset_config = dataset_config or app_config.default_dataset_config
 
         # parameters set by this data adaptor based on the data.
         self.parameters = {}
+        self.uri_path = None
+
+    def set_uri_path(self, path):
+        # uri path to the dataset, e.g. /d/<datasetname>
+        self.uri_path = path
 
     @staticmethod
     @abstractmethod
@@ -31,7 +42,7 @@ class DataAdaptor(metaclass=ABCMeta):
 
     @staticmethod
     @abstractmethod
-    def open(data_locator, config):
+    def open(data_locator, app_config, dataset_config):
         pass
 
     @staticmethod
@@ -61,8 +72,7 @@ class DataAdaptor(metaclass=ABCMeta):
 
     @abstractmethod
     def compute_embedding(self, method, filter):
-        """compute a new embedding on the specified obs subset, and return a
-           tuple of (schema, fbs)."""
+        """compute a new embedding on the specified obs subset, and return the embedding schema. """
         pass
 
     @abstractmethod
@@ -81,6 +91,10 @@ class DataAdaptor(metaclass=ABCMeta):
 
     @abstractmethod
     def query_obs_array(self, term_var):
+        pass
+
+    @abstractmethod
+    def get_colors(self):
         pass
 
     @abstractmethod
@@ -105,13 +119,11 @@ class DataAdaptor(metaclass=ABCMeta):
     def cleanup(self):
         pass
 
-    @abstractmethod
-    def get_location(self):
-        pass
-
-    @abstractmethod
     def get_data_locator(self):
-        pass
+        return self.data_locator
+
+    def get_location(self):
+        return self.data_locator.uri_or_path
 
     def get_about(self):
         return None
@@ -122,6 +134,9 @@ class DataAdaptor(metaclass=ABCMeta):
         if location.endswith("/"):
             location = location[:-1]
         return splitext(basename(location))[0]
+
+    def get_corpora_props(self):
+        return None
 
     @abstractmethod
     def get_schema(self):
@@ -145,8 +160,8 @@ class DataAdaptor(metaclass=ABCMeta):
         features = [
             AppFeature("/cluster/", method="POST", available=False),
             AppFeature("/layout/obs", method="GET", available=self.get_embedding_names() is not None),
-            AppFeature("/layout/obs", method="PUT", available=self.config.embeddings__enable_reembedding),
-            AppFeature("/diffexp/", method="POST", available=self.config.diffexp__enable),
+            AppFeature("/layout/obs", method="PUT", available=self.dataset_config.embeddings__enable_reembedding),
+            AppFeature("/diffexp/", method="POST", available=self.dataset_config.diffexp__enable),
             AppFeature("/annotations/obs", method="PUT", available=annotations is not None),
         ]
         return features
@@ -158,7 +173,7 @@ class DataAdaptor(metaclass=ABCMeta):
         mask = np.zeros((count,), dtype=np.bool)
         for i in filter:
             if type(i) == list:
-                mask[i[0] : i[1]] = True
+                mask[i[0]: i[1]] = True
             else:
                 mask[i] = True
         return mask
@@ -226,18 +241,18 @@ class DataAdaptor(metaclass=ABCMeta):
 
         # all labels must have a name, which must be unique and not used in obs column names
         if not labels_df.columns.is_unique:
-            raise KeyError(f"All column names specified in user annotations must be unique.")
+            raise KeyError("All column names specified in user annotations must be unique.")
 
         # the label index must be unique, and must have same values the anndata obs index
         if not labels_df.index.is_unique:
-            raise KeyError(f"All row index values specified in user annotations must be unique.")
+            raise KeyError("All row index values specified in user annotations must be unique.")
 
         obs_columns = self.get_obs_columns()
 
         duplicate_columns = list(set(labels_df.columns) & set(obs_columns))
         if len(duplicate_columns) > 0:
             raise KeyError(
-                f"Labels file may not contain column names which overlap " f"with h5ad obs columns {duplicate_columns}"
+                "Labels file may not contain column names which overlap " f"with h5ad obs columns {duplicate_columns}"
             )
 
         # labels must have same count as obs annotations
@@ -256,7 +271,6 @@ class DataAdaptor(metaclass=ABCMeta):
         * currently only supports access on VAR axis
         * currently only supports filtering on VAR axis
         """
-
         if axis != Axis.VAR:
             raise ValueError("Only VAR dimension access is supported")
 
@@ -269,7 +283,7 @@ class DataAdaptor(metaclass=ABCMeta):
             raise FilterError("filtering on obs unsupported")
 
         num_columns = self.get_shape()[1] if var_selector is None else np.count_nonzero(var_selector)
-        if self.config.exceeds_limit("column_request_max", num_columns):
+        if self.server_config.exceeds_limit("column_request_max", num_columns):
             raise ExceedsLimitError("Requested dataframe columns exceed column request limit")
 
         X = self.get_X_array(obs_selector, var_selector)
@@ -297,14 +311,14 @@ class DataAdaptor(metaclass=ABCMeta):
         except (KeyError, IndexError):
             raise FilterError("Error parsing filter")
         if top_n is None:
-            top_n = self.config.diffexp__top_n
+            top_n = self.dataset_config.diffexp__top_n
 
-        if self.config.exceeds_limit(
-            "diffexp_cellcount_max", np.count_nonzero(obs_mask_A) + np.count_nonzero(obs_mask_B)
+        if self.server_config.exceeds_limit(
+                "diffexp_cellcount_max", np.count_nonzero(obs_mask_A) + np.count_nonzero(obs_mask_B)
         ):
             raise ExceedsLimitError("Diffexp request exceeds max cell count limit")
 
-        result = self.compute_diffexp_ttest(obs_mask_A, obs_mask_B, top_n, self.config.diffexp__lfc_cutoff)
+        result = self.compute_diffexp_ttest(obs_mask_A, obs_mask_B, top_n, self.dataset_config.diffexp__lfc_cutoff)
 
         try:
             return jsonify_numpy(result)
@@ -322,8 +336,14 @@ class DataAdaptor(metaclass=ABCMeta):
         """
 
         # scale isotropically
-        min = embedding.min(axis=0)
-        max = embedding.max(axis=0)
+        try:
+            min = np.nanmin(embedding, axis=0)
+            max = np.nanmax(embedding, axis=0)
+        except RuntimeError:
+            # indicates entire array was NaN, which should propagate
+            min = np.NaN
+            max = np.NaN
+
         scale = np.amax(max - min)
         normalized_layout = (embedding - min) / scale
 
@@ -347,13 +367,13 @@ class DataAdaptor(metaclass=ABCMeta):
         """
         embeddings = self.get_embedding_names() if fields is None or len(fields) == 0 else fields
         layout_data = []
-        with ServerTiming.time(f"layout.query"):
+        with ServerTiming.time("layout.query"):
             for ename in embeddings:
                 embedding = self.get_embedding_array(ename, 2)
                 normalized_layout = DataAdaptor.normalize_embedding(embedding)
                 layout_data.append(pd.DataFrame(normalized_layout, columns=[f"{ename}_0", f"{ename}_1"]))
 
-        with ServerTiming.time(f"layout.encode"):
+        with ServerTiming.time("layout.encode"):
             if layout_data:
                 df = pd.concat(layout_data, axis=1, copy=False)
             else:

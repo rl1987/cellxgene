@@ -3,7 +3,11 @@ import React from "react";
 import { connect } from "react-redux";
 import * as d3 from "d3";
 import { interpolateCool } from "d3-scale-chromatic";
-import * as globals from "../../globals";
+
+import {
+  createColorTable,
+  createColorQuery,
+} from "../../util/stateManager/colorHelpers";
 
 // create continuous color legend
 // http://bl.ocks.org/syntagmatic/e8ccca52559796be775553b467593a9f
@@ -38,12 +42,12 @@ const continuous = (selectorId, colorscale, colorAccessor) => {
     .range([1, legendheight - margin.top - margin.bottom])
     .domain([
       colorscale.domain()[1],
-      colorscale.domain()[0]
+      colorscale.domain()[0],
     ]); /* we flip this to make viridis colors dark if high in the color scale */
 
   // image data hackery based on http://bl.ocks.org/mbostock/048d21cf747371b11884f75ad896e5a5
   const image = ctx.createImageData(1, legendheight);
-  d3.range(legendheight).forEach(i => {
+  d3.range(legendheight).forEach((i) => {
     const c = d3.rgb(colorscale(legendscale.invert(i)));
     image.data[4 * i] = c.r;
     image.data[4 * i + 1] = c.g;
@@ -63,10 +67,13 @@ const continuous = (selectorId, colorscale, colorAccessor) => {
   */
 
   const legendaxis = d3
-    .axisRight()
-    .scale(legendscale)
-    .tickSize(6)
-    .ticks(8);
+    .axisRight(legendscale)
+    .ticks(6)
+    .tickFormat(
+      d3.format(
+        legendscale.domain().some((n) => Math.abs(n) >= 10000) ? ".0e" : ","
+      )
+    );
 
   const svg = d3
     .select(selectorId)
@@ -98,53 +105,91 @@ const continuous = (selectorId, colorscale, colorAccessor) => {
     .text(colorAccessor);
 };
 
-@connect(state => ({
-  colorAccessor: state.colors.colorAccessor,
-  colorScale: state.colors.scale,
-  responsive: state.responsive
+@connect((state) => ({
+  annoMatrix: state.annoMatrix,
+  colors: state.colors,
 }))
 class ContinuousLegend extends React.Component {
   constructor(props) {
     super(props);
-    this.state = {};
+    this.ref = null;
+    this.state = {
+      colorAccessor: null,
+      colorScale: null,
+    };
+  }
+
+  componentDidMount() {
+    this.updateState(null);
   }
 
   componentDidUpdate(prevProps) {
-    const { colorAccessor, responsive, colorScale } = this.props;
-    if (
-      prevProps.colorAccessor !== colorAccessor ||
-      prevProps.colorScale !== colorScale ||
-      prevProps.responsive.height !== responsive.height ||
-      prevProps.responsive.width !== responsive.width
-    ) {
-      /* always remove it, if it's not continuous we don't put it back. */
-      d3.select("#continuous_legend")
-        .selectAll("*")
-        .remove();
-    }
+    this.updateState(prevProps);
+  }
 
-    if (colorAccessor && colorScale && colorScale.range) {
-      /* fragile! continuous range is 0 to 1, not [#fa4b2c, ...], make this a flag? */
-      if (colorScale.range()[0][0] !== "#") {
-        continuous(
-          "#continuous_legend",
-          d3.scaleSequential(interpolateCool).domain(colorScale.domain()),
-          colorAccessor
-        );
+  async updateState(prevProps) {
+    const { annoMatrix, colors } = this.props;
+    if (!colors || !annoMatrix) return;
+
+    if (colors !== prevProps?.colors || annoMatrix !== prevProps?.annoMatrix) {
+      const { schema } = annoMatrix;
+      const { colorMode, colorAccessor, userColors } = colors;
+      const colorQuery = createColorQuery(colorMode, colorAccessor, schema);
+      const colorDf = colorQuery ? await annoMatrix.fetch(...colorQuery) : null;
+      const colorTable = createColorTable(
+        colorMode,
+        colorAccessor,
+        colorDf,
+        schema,
+        userColors
+      );
+
+      const colorScale = colorTable.scale;
+      const range = colorScale?.range;
+      const [domainMin, domainMax] = colorScale?.domain?.() ?? [0, 0];
+
+      /* always remove it, if it's not continuous we don't put it back. */
+      d3.select("#continuous_legend").selectAll("*").remove();
+
+      if (colorAccessor && colorScale && range && domainMin < domainMax) {
+        /* fragile! continuous range is 0 to 1, not [#fa4b2c, ...], make this a flag? */
+        if (range()[0][0] !== "#") {
+          continuous(
+            "#continuous_legend",
+            d3.scaleSequential(interpolateCool).domain(colorScale.domain()),
+            colorAccessor
+          );
+        }
       }
+
+      this.setState({
+        colorAccessor,
+        colorScale: colorTable.scale,
+      });
     }
   }
 
   render() {
-    const { colorAccessor, responsive } = this.props;
+    const { colorAccessor, colorScale } = this.state;
+    if (
+      colorScale?.domain &&
+      colorScale.domain()[1] === colorScale.domain()[0]
+    ) {
+      /* it's a single value, not a distribution, min max are the same */
+      return null;
+    }
     return (
       <div
         id="continuous_legend"
+        ref={(ref) => {
+          this.ref = ref;
+        }}
         style={{
-          position: "fixed",
           display: colorAccessor ? "inherit" : "none",
-          right: globals.leftSidebarWidth,
-          top: responsive.height / 2
+          position: "absolute",
+          left: 8,
+          top: 35,
+          zIndex: 1,
         }}
       />
     );
