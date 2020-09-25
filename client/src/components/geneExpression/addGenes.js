@@ -56,6 +56,7 @@ const filterGenes = (query, genes) =>
     userDefinedGenes: state.controls.userDefinedGenes,
     userDefinedGenesLoading: state.controls.userDefinedGenesLoading,
     differential: state.differential,
+    geneSetLoading: state.controls.geneSetLoading,
   };
 })
 class AddGenes extends React.Component {
@@ -212,7 +213,7 @@ class AddGenes extends React.Component {
   }
 
   render() {
-    const { userDefinedGenesLoading } = this.props;
+    const { userDefinedGenesLoading, geneSetLoading, dispatch } = this.props;
     const { tab, bulkAdd, activeItem, status, geneNames } = this.state;
 
     // may still be loading!
@@ -260,7 +261,11 @@ class AddGenes extends React.Component {
               resetOnSelect
               closeOnSelect
               resetOnClose
-              itemDisabled={userDefinedGenesLoading ? () => true : () => false}
+              itemDisabled={
+                userDefinedGenesLoading || geneSetLoading
+                  ? () => true
+                  : () => false
+              }
               noResults={<MenuItem disabled text="No matching genes." />}
               onItemSelect={(g) => {
                 /* this happens on 'enter' */
@@ -276,11 +281,35 @@ class AddGenes extends React.Component {
               itemRenderer={renderGene}
               items={geneNames || ["No genes"]}
               popoverProps={{ minimal: true }}
+              createNewItemFromQuery={(query) => {
+                if (!query.startsWith("$"))
+                  dispatch({
+                    type: "fetch gene set",
+                    accessCode: query.substring(1),
+                  });
+              }}
+              createNewItemRenderer={(query) => {
+                if (query.startsWith("$")) {
+                  return (
+                    <MenuItem
+                      onClick={() => {
+                        if (!query.startsWith("$")) return;
+                        dispatch({
+                          type: "fetch gene set",
+                          accessCode: query.substring(1),
+                        });
+                      }}
+                      text={`Load gene set with code: ${query}`}
+                    />
+                  );
+                }
+                return null;
+              }}
             />
             <Button
               className="bp3-button bp3-intent-primary"
               data-testid="add-gene"
-              loading={userDefinedGenesLoading}
+              loading={userDefinedGenesLoading || geneSetLoading}
               onClick={() => this.handleClick(activeItem)}
             >
               Add gene

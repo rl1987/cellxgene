@@ -211,6 +211,15 @@ function fetchJson(pathAndQuery) {
   );
 }
 
+const requestGeneSet = (gene) => async (dispatch) => {
+  return dispatch({
+    type: "request gene set success",
+    data: {
+      genes: [gene],
+    },
+  });
+};
+
 export default {
   doInitialDataLoad,
   requestDifferentialExpression,
@@ -245,4 +254,5 @@ export default {
   needToSaveObsAnnotations: annoActions.needToSaveObsAnnotations,
   layoutChoiceAction: embActions.layoutChoiceAction,
   setCellSetFromSelection: selnActions.setCellSetFromSelection,
+  requestGeneSet,
 };
